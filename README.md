@@ -4,7 +4,7 @@
 ![Next.js](https://img.shields.io/badge/Next.js-15+-black.svg)
 ![Python](https://img.shields.io/badge/Python-3.8+-yellow.svg)
 
-> **打破设备边界，让远程控制像刷网页一样简单！**
+> **打破设备边界，让远程控制像刷网页一样简单 ！**
 
 RootDesk 是一款专为开发者和极客打造的**全栈远程控制系统**。它由 **Next.js 强力驱动的 Web 控制端** 和 **轻量级 Python 客户端** 组成。无需安装臃肿的桌面软件，只要有浏览器，你就能随时随地掌控你的远程设备。
 
