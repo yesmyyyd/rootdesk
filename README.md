@@ -137,8 +137,8 @@ location /admin/ws {
 
 ### 1. 运行客户端 (Client)
 客户端为绿色免安装的 `.exe` 可执行文件，支持连接到你的私有服务器。 
-客户端下载：https://pan.baidu.com/s/1hlCG-AqXjaWuNtpLkdArFA?pwd=mem9
-
+客户端下载百度网盘：https://pan.baidu.com/s/1hlCG-AqXjaWuNtpLkdArFA?pwd=mem9
+客户端下载蓝奏网盘：https://wwanu.lanzoue.com/iHMnn3mqvatc
 
 **系统支持：** Windows 7 / 8 / 10 / 11 (x64/x86)
 
