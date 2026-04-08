@@ -140,7 +140,7 @@ location /admin/ws {
 
 客户端下载百度网盘：https://pan.baidu.com/s/1hlCG-AqXjaWuNtpLkdArFA?pwd=mem9
 
-客户端下载蓝奏网盘：https://wwanu.lanzoue.com/iHMnn3mqvatc
+客户端下载蓝奏网盘：https://wwanu.lanzoue.com/b0hdu5mxg 密码:rootdesk
 
 **系统支持：** Windows 7 / 8 / 10 / 11 (x64/x86)
 
