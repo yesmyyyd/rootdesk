@@ -1,0 +1,20 @@
+{
+  "downloadUrl": "https://wwanu.lanzoue.com/i88v63ms38kf",
+  "version": 3,
+  "version_name": "1.0.3",
+  "version_desc": "修复找不到服务器问题",
+  "version_url": "https://rootdesk.cn/download/RootDesk.exe",
+  "version_q": 0,
+  "remote": [
+    {
+      "imageUrl": "https://rootdesk.cn/adimg/m2.png",
+      "clickUrl": "https://github.com/yesmyyyd/rootdesk"
+    }
+  ],
+  "client": [
+    {
+      "imageUrl": "https://rootdesk.cn/adimg/m2.png",
+      "clickUrl": "https://github.com/yesmyyyd/rootdesk"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+如果win7不能正常打开 
+
+①安装运行环境
+微软常用运行库合集
+https://www.ddooo.com/softdown/187307.htm
+
+
+②在安装补丁
+KB3063858
+https://www.microsoft.com/zh-cn/download/details.aspx?id=47442
+
+ 

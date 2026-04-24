@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RootDesk - 开源远程桌面客户端</title>
+  <script src="tailwindcss.3.4.17.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            background: '#0a0a0f',
+            foreground: '#e4e4e7',
+            card: '#131318',
+            'card-hover': '#1a1a22',
+            border: '#27272a',
+            primary: '#3b82f6',
+            'primary-hover': '#2563eb',
+            muted: '#71717a',
+            success: '#22c55e',
+            danger: '#ef4444',
+            warning: '#f59e0b',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    input:focus, button:focus { outline: none; }
+    .sidebar-link { transition: all 0.2s; }
+    .sidebar-link:hover { background: #1a1a22; }
+    .sidebar-link.active { background: #1e3a5f; color: #3b82f6; }
+    .btn-primary { transition: all 0.2s; }
+    .btn-primary:hover { background: #2563eb; }
+    .copy-btn:hover { background: #27272a; }
+    .input-field:focus { border-color: #3b82f6; }
+    .toast { animation: slideIn 0.3s ease; }
+    @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .pulse { animation: pulse 2s infinite; }
+    /* Modal styles */
+    .modal { display: none; position: fixed; inset: 0; z-index: 50; }
+    .modal.active { display: flex; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.8); }
+    .modal-content { position: relative; z-index: 10; }
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #131318; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+  </style>
+</head>
+<body class="bg-background text-foreground min-h-screen bg-transparent">
+  <!-- Main Content -->
+  <main class="flex-1 overflow-auto h-screen">
+      <!-- Header -->
+      <header class="bg-card/50 border-b border-border px-6 py-3">
+        <p class="text-sm text-muted">轻量化原生远程控制软件，高效连接远端设备，实现桌面实时查看、键鼠操作与全程远程管理。</p>
+      </header>
+
+      <!-- Service/Driver Warnings -->
+      <div id="warningContainer" class="px-6 py-2 space-y-2 hidden">
+        <div id="serviceWarning" class="bg-danger/10 border border-danger/20 rounded-lg p-3 flex items-center justify-between hidden">
+          <div class="flex items-center gap-3 text-danger">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <span class="text-sm font-medium">系统服务未安装，可能导致远程桌面无法在锁屏或高权限界面运行。</span>
+          </div>
+          <button onclick="fixServiceDriver()" class="px-3 py-1 bg-danger text-white text-xs rounded hover:bg-danger/80 transition shadow-sm">立即修复</button>
+        </div>
+        <div id="driverWarning" class="bg-warning/10 border border-warning/20 rounded-lg p-3 flex items-center justify-between hidden">
+          <div class="flex items-center gap-3 text-warning">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span class="text-sm font-medium">虚拟鼠标驱动未安装，可能导致无法模拟鼠标移动或点击。</span>
+          </div>
+          <button onclick="fixServiceDriver()" class="px-3 py-1 bg-warning text-white text-xs rounded hover:bg-warning/80 transition shadow-sm">立即修复</button>
+        </div>
+      </div>
+
+      <!-- Content -->
+      <div class="p-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Host Info -->
+          <div class="bg-card rounded-xl p-6 border border-border">
+            <h2 class="text-lg font-semibold mb-6">主机信息</h2>
+            
+            <div class="space-y-5">
+              <!-- Device ID -->
+              <div>
+                <label class="text-sm text-muted mb-2 block">设备ID</label>
+                <div class="flex items-center gap-2">
+                  <span id="deviceId" class="text-2xl font-mono font-bold text-primary">812605935</span>
+                   
+                  <button onclick="copyText(document.getElementById('deviceId').textContent, '设备ID')" class="copy-btn p-2 rounded-lg hover:bg-border transition">
+                    <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Access Code -->
+              <div>
+                <div class="flex items-center gap-4 mb-2">
+                  <label class="text-sm text-muted">访问码</label>
+                  <span class="text-xs text-muted">自动刷新: <span id="refreshTime">04-16 18:30</span></span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span id="accessCode" class="text-2xl font-mono font-bold text-primary">310667</span>
+                  <button onclick="refreshAccessCode()" class="copy-btn p-2 rounded-lg hover:bg-border transition" title="刷新访问码">
+                    <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                  </button>
+                  <button onclick="copyText(document.getElementById('accessCode').textContent, '访问码')" class="copy-btn p-2 rounded-lg hover:bg-border transition">
+                    <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                  </button>
+                  <button onclick="toggleCodeVisibility()" class="copy-btn p-2 rounded-lg hover:bg-border transition" title="显示/隐藏">
+                    <svg id="eyeIcon" class="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <button onclick="copyDeviceInfo()" class="flex items-center gap-2 text-primary hover:text-primary-hover transition text-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+                复制设备信息
+              </button>
+            </div>
+          </div>
+
+          <!-- Connected Clients -->
+          <div class="bg-card rounded-xl p-6 border border-border">
+            <h2 class="text-lg font-semibold mb-6">已连接的客户端</h2>
+            
+            <div id="connectedClients" class="flex flex-col items-center justify-center h-48 text-muted">
+              <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+                </svg>
+              </div>
+              <p>暂无客户端连接</p>
+            </div>
+          </div>
+
+          <!-- Connect to Remote -->
+          <div class="bg-card rounded-xl p-6 border border-border">
+            <h2 class="text-lg font-semibold mb-6">连接到远程</h2>
+            
+            <div class="space-y-4">
+              <div>
+                <label class="text-sm text-muted mb-2 block">远程设备ID</label>
+                <input type="text" id="remoteId" placeholder="请输入9位设备ID" 
+                  class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+              </div>
+              
+              <div>
+                <label class="text-sm text-muted mb-2 block">访问密码</label>
+                <div class="relative">
+                  <input type="password" id="remotePassword" placeholder="请输入访问密码" 
+                    class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 pr-12 text-foreground placeholder-muted focus:border-primary transition">
+                  <button onclick="togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-foreground">
+                    <svg id="passwordEyeIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <button onclick="connectToRemote()" class="btn-primary w-full bg-primary text-white font-medium py-3 rounded-lg hover:bg-primary-hover transition">
+                连接
+              </button>
+            </div>
+          </div>
+
+          <!-- My Remote Connections -->
+          <div class="bg-card rounded-xl p-6 border border-border">
+            <h2 class="text-lg font-semibold mb-6">我的远程连接</h2>
+            
+            <div id="myConnections" class="flex flex-col items-center justify-center h-48 text-muted">
+              <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </div>
+              <p>暂无远程连接</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+  <!-- Login Modal -->
+  <div id="loginModal" class="modal items-center justify-center">
+    <div class="modal-backdrop" onclick="closeLoginModal()"></div>
+    <div class="modal-content bg-card rounded-2xl p-8 w-full max-w-md border border-border">
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-xl font-semibold">登录 RootDesk</h2>
+        <button onclick="closeLoginModal()" class="text-muted hover:text-foreground">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="flex gap-4 mb-6">
+        <button onclick="switchTab('login')" id="loginTab" class="flex-1 py-2 text-center border-b-2 border-primary text-primary font-medium">登录</button>
+        <button onclick="switchTab('register')" id="registerTab" class="flex-1 py-2 text-center border-b-2 border-transparent text-muted">注册</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="space-y-4">
+        <div>
+          <label class="text-sm text-muted mb-2 block">邮箱地址</label>
+          <input type="email" placeholder="请输入邮箱" class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">密码</label>
+          <input type="password" placeholder="请输入密码" class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div class="flex items-center justify-between text-sm">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" class="w-4 h-4 rounded border-border bg-background">
+            <span class="text-muted">记住我</span>
+          </label>
+          <a href="#" class="text-primary hover:underline">忘记密码?</a>
+        </div>
+        <button type="button" onclick="handleLogin()" class="btn-primary w-full bg-primary text-white font-medium py-3 rounded-lg hover:bg-primary-hover transition">登录</button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="registerForm" class="space-y-4 hidden">
+        <div>
+          <label class="text-sm text-muted mb-2 block">用户名</label>
+          <input type="text" placeholder="请输入用户名" class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">邮箱地址</label>
+          <input type="email" placeholder="请输入邮箱" class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">密码</label>
+          <input type="password" placeholder="请输入密码 (至少6位)" class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">确认密码</label>
+          <input type="password" placeholder="请再次输入密码" class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <button type="button" onclick="handleRegister()" class="btn-primary w-full bg-primary text-white font-medium py-3 rounded-lg hover:bg-primary-hover transition">注册</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Connection Modal -->
+  <div id="connectionModal" class="modal items-center justify-center">
+    <div class="modal-backdrop" onclick="closeConnectionModal()"></div>
+    <div class="modal-content bg-card rounded-2xl w-full max-w-[90vw] h-[90vh] border border-border flex flex-col overflow-hidden">
+      <div id="connectingState" class="flex-1 flex flex-col items-center justify-center text-center">
+        <div class="w-20 h-20 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+        <h2 class="text-xl font-semibold mb-2">正在连接...</h2>
+        <p class="text-muted mb-4">正在连接到设备 <span id="connectingDeviceId"></span></p>
+        <button onclick="cancelConnection()" class="text-danger hover:underline">取消连接</button>
+      </div>
+
+      <div id="connectedState" class="hidden flex-1 flex flex-col">
+        <div class="flex justify-between items-center px-6 py-3 border-b border-border bg-card/50">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-primary/20 rounded-lg flex items-center justify-center">
+              <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-sm font-semibold">远程桌面: <span id="remoteDeviceDisplay"></span></h2>
+              <p class="text-[10px] text-muted">连接时长: <span id="connectionTime">00:00</span></p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="toggleFullScreen()" class="p-2 hover:bg-border rounded-lg transition" title="全屏">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+              </svg>
+            </button>
+            <button onclick="disconnectRemote()" class="px-3 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded-lg text-xs font-medium transition">
+              断开连接
+            </button>
+          </div>
+        </div>
+        <div class="flex-1 bg-black relative">
+          <iframe id="remoteFrame" class="w-full h-full border-none"></iframe>
+        </div>
+      </div>
+
+      <div id="failedState" class="hidden flex-1 flex flex-col items-center justify-center text-center p-8">
+        <div class="w-20 h-20 bg-danger/20 rounded-full flex items-center justify-center mx-auto mb-6">
+          <svg class="w-10 h-10 text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </div>
+        <h2 class="text-xl font-semibold mb-2">连接失败</h2>
+        <p class="text-muted mb-6">无法连接到远程设备，请检查设备ID和密码是否正确</p>
+        <div class="flex gap-4 justify-center">
+          <button onclick="closeConnectionModal()" class="px-6 py-2 border border-border rounded-lg hover:bg-card-hover transition">关闭</button>
+          <button onclick="retryConnection()" class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition">重试</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-6 right-6 bg-card border border-border rounded-lg px-4 py-3 shadow-lg hidden">
+    <div class="flex items-center gap-3">
+      <svg id="toastIcon" class="w-5 h-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+      </svg>
+      <span id="toastMessage"></span>
+    </div>
+  </div>
+
+  <script>
+    // Initialize refresh time
+    function updateRefreshTime() {
+      const now = new Date();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('refreshTime').textContent = `${month}-${day} ${hours}:${minutes}`;
+    }
+    updateRefreshTime();
+
+    // Pywebview Integration
+    let pywebviewReady = false;
+    function initPywebview() {
+      if (pywebviewReady) return;
+      const pwv = window.pywebview || (window.parent && window.parent.pywebview);
+      if (pwv && pwv.api) {
+        pywebviewReady = true;
+        window.pywebview = pwv;
+        console.log('Pywebview is ready');
+        updateFromPython();
+        // Poll for updates every second
+        setInterval(updateFromPython, 1000);
+      }
+    }
+    window.addEventListener('pywebviewready', initPywebview);
+    const initTimer = setInterval(() => {
+      const pwv = window.pywebview || (window.parent && window.parent.pywebview);
+      if (pwv && pwv.api) {
+        clearInterval(initTimer);
+        initPywebview();
+      }
+    }, 100);
+
+    function updateFromPython() {
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_init_data().then(data => {
+          document.getElementById('deviceId').textContent = data.deviceId;
+          if (codeVisible) {
+            document.getElementById('accessCode').textContent = data.devicePassword;
+          }
+
+          // Update Service/Driver warnings
+          const serviceWarning = document.getElementById('serviceWarning');
+          const driverWarning = document.getElementById('driverWarning');
+          const warningContainer = document.getElementById('warningContainer');
+          
+          let hasWarning = false;
+          if (data.hasService === false) {
+            serviceWarning.classList.remove('hidden');
+            hasWarning = true;
+          } else {
+            serviceWarning.classList.add('hidden');
+          }
+          
+          if (data.hasInterception === false) {
+            driverWarning.classList.remove('hidden');
+            hasWarning = true;
+          } else {
+            driverWarning.classList.add('hidden');
+          }
+          
+          if (hasWarning) {
+            warningContainer.classList.remove('hidden');
+          } else {
+            warningContainer.classList.add('hidden');
+          }
+          
+          const statusDot = document.querySelector('.bg-success.rounded-full');
+          const statusText = document.querySelector('aside .text-xs.text-muted span:last-child');
+          
+          if (statusDot && statusText) {
+            if (data.serverConnected) {
+              statusDot.classList.remove('bg-danger');
+              statusDot.classList.add('bg-success');
+              statusText.textContent = `主机: 已连接 [${data.role}]`;
+            } else {
+              statusDot.classList.remove('bg-success');
+              statusDot.classList.add('bg-danger');
+              statusText.textContent = '主机: 未连接';
+            }
+          }
+
+          // Notify parent frame to update status
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: 'updateStatus',
+              serverConnected: data.serverConnected,
+              role: data.role
+            }, '*');
+          }
+          
+          // Update control status
+          const ctrlLabel = document.getElementById('connectedClients');
+          if (data.viewerCount > 0) {
+             ctrlLabel.innerHTML = `
+               <div class="flex flex-col items-center">
+                 <div class="w-16 h-16 bg-primary/20 rounded-full flex items-center justify-center mb-4 pulse">
+                   <svg class="w-8 h-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                   </svg>
+                 </div>
+                 <p class="text-primary font-medium">正在被控制</p>
+                 <p class="text-xs mt-1">${data.viewerCount} 个控制端正在查看</p>
+               </div>
+             `;
+          } else {
+             ctrlLabel.innerHTML = `
+               <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
+                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+                 </svg>
+               </div>
+               <p>暂无客户端连接</p>
+             `;
+          }
+        });
+      }
+    }
+
+    // Toast notification
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      const toastMessage = document.getElementById('toastMessage');
+      const toastIcon = document.getElementById('toastIcon');
+      
+      toastMessage.textContent = message;
+      toastIcon.className = type === 'success' ? 'w-5 h-5 text-success' : 'w-5 h-5 text-danger';
+      
+      toast.classList.remove('hidden');
+      toast.classList.add('toast');
+      
+      setTimeout(() => {
+        toast.classList.add('hidden');
+        toast.classList.remove('toast');
+      }, 3000);
+    }
+
+    // Copy functions
+    function copyText(text, label) {
+      navigator.clipboard.writeText(text).then(() => {
+        showToast(`${label}已复制到剪贴板`);
+      });
+    }
+
+    function copyDeviceInfo() {
+      const deviceId = document.getElementById('deviceId').textContent;
+      const accessCodeElement = document.getElementById('accessCode');
+      const accessCode = accessCodeElement.dataset.code || accessCodeElement.textContent;
+      const info = `设备ID: ${deviceId}\n访问码: ${accessCode}`;
+      navigator.clipboard.writeText(info).then(() => {
+        showToast('设备信息已复制到剪贴板');
+      });
+    }
+
+    // Refresh device ID
+    function refreshDeviceId() {
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.refresh_device_id().then(newId => {
+          if (newId) {
+            document.getElementById('deviceId').textContent = newId;
+            showToast('设备ID已刷新');
+          }
+        });
+      } else {
+        const newId = Math.floor(100000000 + Math.random() * 900000000).toString();
+        const formatted = `${newId.substring(0,3)} ${newId.substring(3,6)} ${newId.substring(6,9)}`;
+        document.getElementById('deviceId').textContent = formatted;
+        showToast('设备ID已刷新');
+      }
+    }
+
+    // Refresh access code
+    function refreshAccessCode() {
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.refresh_password().then(res => {
+          if (res && res.success) {
+            document.getElementById('accessCode').textContent = res.newPassword;
+            updateRefreshTime();
+            showToast('访问码已刷新');
+          }
+        });
+      } else {
+        const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+        document.getElementById('accessCode').textContent = newCode;
+        updateRefreshTime();
+        showToast('访问码已刷新');
+      }
+    }
+
+    function fixServiceDriver() {
+      if (window.pywebview && window.pywebview.api) {
+        showToast('正在尝试修复...', 'info');
+        window.pywebview.api.fix_service_driver().then(res => {
+          if (res.success) {
+            showToast('修复任务已提交: ' + res.message, 'success');
+            updateFromPython();
+          } else {
+            showToast('修复失败: ' + res.error, 'danger');
+          }
+        });
+      }
+    }
+
+    // Toggle code visibility
+    let codeVisible = true;
+    function toggleCodeVisibility() {
+      codeVisible = !codeVisible;
+      const accessCode = document.getElementById('accessCode');
+      if (codeVisible) {
+        accessCode.textContent = accessCode.dataset.code || '310667';
+      } else {
+        accessCode.dataset.code = accessCode.textContent;
+        accessCode.textContent = '******';
+      }
+    }
+
+    // Toggle password visibility
+    let passwordVisible = false;
+    function togglePasswordVisibility() {
+      passwordVisible = !passwordVisible;
+      const passwordInput = document.getElementById('remotePassword');
+      passwordInput.type = passwordVisible ? 'text' : 'password';
+    }
+
+    // Login Modal
+    function openLoginModal() {
+      document.getElementById('loginModal').classList.add('active');
+    }
+
+    function closeLoginModal() {
+      document.getElementById('loginModal').classList.remove('active');
+    }
+
+    function switchTab(tab) {
+      const loginTab = document.getElementById('loginTab');
+      const registerTab = document.getElementById('registerTab');
+      const loginForm = document.getElementById('loginForm');
+      const registerForm = document.getElementById('registerForm');
+
+      if (tab === 'login') {
+        loginTab.classList.add('border-primary', 'text-primary');
+        loginTab.classList.remove('border-transparent', 'text-muted');
+        registerTab.classList.remove('border-primary', 'text-primary');
+        registerTab.classList.add('border-transparent', 'text-muted');
+        loginForm.classList.remove('hidden');
+        registerForm.classList.add('hidden');
+      } else {
+        registerTab.classList.add('border-primary', 'text-primary');
+        registerTab.classList.remove('border-transparent', 'text-muted');
+        loginTab.classList.remove('border-primary', 'text-primary');
+        loginTab.classList.add('border-transparent', 'text-muted');
+        registerForm.classList.remove('hidden');
+        loginForm.classList.add('hidden');
+      }
+    }
+
+    function handleLogin() {
+      showToast('登录成功');
+      closeLoginModal();
+    }
+
+    function handleRegister() {
+      showToast('注册成功');
+      switchTab('login');
+    }
+
+    // Connection Modal
+    let connectionTimer;
+    let connectionSeconds = 0;
+
+    async function connectToRemote() {
+      const remoteId = document.getElementById('remoteId').value;
+      const remotePassword = document.getElementById('remotePassword').value;
+
+      if (!remoteId || (remoteId.replace(/\s/g, '').length !== 9 && remoteId.replace(/\s/g, '').length !== 10)) {
+        showToast('请输入正确的设备ID', 'error');
+        return;
+      }
+
+      if (!remotePassword) {
+        showToast('请输入访问密码', 'error');
+        return;
+      }
+
+      const cleanId = remoteId.replace(/\s/g, '');
+      let appUrl = window.location.origin; // Fallback to current origin
+      
+      // If running in pywebview, get the configured app URL
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.get_app_url) {
+        try {
+          const data = await window.pywebview.api.get_app_url();
+          if (data && data.url) {
+            appUrl = data.url;
+          }
+        } catch (e) {
+          console.error("Failed to get app URL from python:", e);
+        }
+      }
+      
+      const url = `${appUrl}/?deviceId=${cleanId}&password=${remotePassword}&autostart=true`;
+      
+      // Save device to local list
+      try {
+        let savedDevices = [];
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.get_saved_devices) {
+          const res = await window.pywebview.api.get_saved_devices();
+          if (res.success) {
+            savedDevices = res.devices || [];
+          }
+        }
+        
+        const existingIndex = savedDevices.findIndex(d => d.id === cleanId);
+        if (existingIndex >= 0) {
+          savedDevices[existingIndex].password = remotePassword;
+        } else {
+          savedDevices.push({
+            id: cleanId,
+            password: remotePassword,
+            name: `设备 ${cleanId}`,
+            os: "Unknown",
+            platform: "pc"
+          });
+        }
+        
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.save_devices) {
+          await window.pywebview.api.save_devices(savedDevices);
+        }
+      } catch(e) {
+        console.error("Failed to save device:", e);
+      }
+
+      // Open in system browser instead of internal modal
+      showToast(`正在连接到设备 ${remoteId}...`);
+      if (window.pywebview && window.pywebview.api) {
+        // Use window.open for better browser compatibility in pywebview
+        window.open(url, '_blank');
+      } else {
+        window.open(url, '_blank');
+      }
+    }
+
+    function retryConnection() {
+      connectToRemote();
+    }
+  </script>
+</body>
+</html>

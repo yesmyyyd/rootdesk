@@ -1,0 +1,1 @@
+python -m PyInstaller -F -w --add-data "library;library" --add-data "icon.ico;." --collect-all av --collect-all aiortc --collect-all pystray --hidden-import PIL._tkinter_finder --uac-admin -i icon.ico client.py

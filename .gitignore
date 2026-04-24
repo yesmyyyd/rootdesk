@@ -1,0 +1,6 @@
+node_modules/
+.next/
+.env*.local
+.DS_Store
+/客户端/dist
+server/data

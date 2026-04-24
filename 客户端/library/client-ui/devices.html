@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>设备列表 - RootDesk</title>
+  <script src="tailwindcss.3.4.17.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            background: '#0a0a0f',
+            foreground: '#e4e4e7',
+            card: '#131318',
+            'card-hover': '#1a1a22',
+            border: '#27272a',
+            primary: '#3b82f6',
+            'primary-hover': '#2563eb',
+            muted: '#71717a',
+            success: '#22c55e',
+            danger: '#ef4444',
+            warning: '#f59e0b',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    input:focus, button:focus { outline: none; }
+    .sidebar-link { transition: all 0.2s; }
+    .sidebar-link:hover { background: #1a1a22; }
+    .sidebar-link.active { background: #1e3a5f; color: #3b82f6; }
+    .device-card { transition: all 0.2s; }
+    .device-card:hover { background: #1a1a22; transform: translateY(-2px); }
+    .btn-primary { transition: all 0.2s; }
+    .btn-primary:hover { background: #2563eb; }
+    .input-field:focus { border-color: #3b82f6; }
+    .toast { animation: slideIn 0.3s ease; }
+    @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .modal { display: none; position: fixed; inset: 0; z-index: 50; }
+    .modal.active { display: flex; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.8); }
+    .modal-content { position: relative; z-index: 10; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #131318; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+  </style>
+</head>
+<body class="bg-background text-foreground min-h-screen bg-transparent">
+  <!-- Main Content -->
+  <main class="flex-1 overflow-auto h-screen">
+      <header class="bg-card/50 border-b border-border px-6 py-3">
+        <p class="text-sm text-muted">管理您的远程设备，快速连接常用设备</p>
+      </header>
+
+      <div class="p-6">
+        <!-- Header Actions -->
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-4">
+            <h1 class="text-xl font-semibold">我的设备</h1>
+            <span id="deviceCount" class="text-sm text-muted">共 - 台设备</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <div class="relative">
+              <svg class="w-5 h-5 text-muted absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+              <input type="text" id="searchInput" placeholder="搜索设备..." oninput="filterDevices()" 
+                class="input-field bg-card border border-border rounded-lg pl-10 pr-4 py-2 w-64 text-foreground placeholder-muted focus:border-primary transition">
+            </div>
+            <button onclick="openAddDeviceModal()" class="btn-primary bg-primary text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-primary-hover transition">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+              </svg>
+              添加设备
+            </button>
+          </div>
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="flex gap-2 mb-6">
+          <button onclick="setFilter('all')" class="filter-btn active px-4 py-2 rounded-lg bg-primary/20 text-primary text-sm" data-filter="all">全部</button>
+          <button onclick="setFilter('online')" class="filter-btn px-4 py-2 rounded-lg bg-card text-muted text-sm hover:bg-card-hover" data-filter="online">在线</button>
+          <button onclick="setFilter('offline')" class="filter-btn px-4 py-2 rounded-lg bg-card text-muted text-sm hover:bg-card-hover" data-filter="offline">离线</button>
+        </div>
+
+        <!-- Device Grid -->
+        <div id="deviceGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <!-- Devices will be rendered here -->
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="hidden flex flex-col items-center justify-center py-20 text-muted">
+          <div class="w-20 h-20 bg-card rounded-full flex items-center justify-center mb-4">
+            <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+            </svg>
+          </div>
+          <p class="text-lg font-medium mb-2">没有找到设备</p>
+          <p class="text-sm">点击上方"添加设备"按钮添加新设备</p>
+        </div>
+      </div>
+    </main>
+
+  <!-- Add/Edit Device Modal -->
+  <div id="deviceModal" class="modal items-center justify-center">
+    <div class="modal-backdrop" onclick="closeDeviceModal()"></div>
+    <div class="modal-content bg-card rounded-2xl p-8 w-full max-w-md border border-border">
+      <div class="flex justify-between items-center mb-6">
+        <h2 id="modalTitle" class="text-xl font-semibold">添加设备</h2>
+        <button onclick="closeDeviceModal()" class="text-muted hover:text-foreground">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <form id="deviceForm" class="space-y-4">
+        <input type="hidden" id="editDeviceId">
+        <div>
+          <label class="text-sm text-muted mb-2 block">设备名称</label>
+          <input type="text" id="deviceName" placeholder="例如: 办公室电脑" 
+            class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">设备ID</label>
+          <input type="text" id="deviceIdInput" placeholder="请输入9位设备ID" maxlength="9"
+            class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">访问密码 (可选)</label>
+          <input type="password" id="devicePassword" placeholder="保存密码以便快速连接"
+            class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-2 block">备注 (可选)</label>
+          <textarea id="deviceNote" rows="2" placeholder="添加备注信息"
+            class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition resize-none"></textarea>
+        </div>
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="closeDeviceModal()" class="flex-1 py-3 border border-border rounded-lg hover:bg-card-hover transition">取消</button>
+          <button type="button" onclick="saveDevice()" class="flex-1 py-3 bg-primary text-white rounded-lg hover:bg-primary-hover transition">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Delete Confirmation Modal -->
+  <div id="deleteModal" class="modal items-center justify-center">
+    <div class="modal-backdrop" onclick="closeDeleteModal()"></div>
+    <div class="modal-content bg-card rounded-2xl p-8 w-full max-w-sm border border-border text-center">
+      <div class="w-16 h-16 bg-danger/20 rounded-full flex items-center justify-center mx-auto mb-4">
+        <svg class="w-8 h-8 text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+        </svg>
+      </div>
+      <h2 class="text-xl font-semibold mb-2">删除设备</h2>
+      <p class="text-muted mb-6">确定要删除设备 "<span id="deleteDeviceName"></span>" 吗？此操作无法撤销。</p>
+      <div class="flex gap-3">
+        <button onclick="closeDeleteModal()" class="flex-1 py-2.5 border border-border rounded-lg hover:bg-card-hover transition">取消</button>
+        <button onclick="confirmDelete()" class="flex-1 py-2.5 bg-danger text-white rounded-lg hover:bg-red-600 transition">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-6 right-6 bg-card border border-border rounded-lg px-4 py-3 shadow-lg hidden">
+    <div class="flex items-center gap-3">
+      <svg id="toastIcon" class="w-5 h-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+      </svg>
+      <span id="toastMessage"></span>
+    </div>
+  </div>
+
+  <script>
+    // Pywebview Integration
+    let pywebviewReady = false;
+    function initPywebview() {
+      if (pywebviewReady) return;
+      const pwv = window.pywebview || (window.parent && window.parent.pywebview);
+      if (pwv && pwv.api) {
+        pywebviewReady = true;
+        window.pywebview = pwv;
+        loadDevices(); // Load data once API is ready
+        window.pywebview.api.get_init_data().then(data => {
+          // Update status in sidebar (delegated to parent)
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: 'updateStatus',
+              serverConnected: data.serverConnected,
+              role: data.role
+            }, '*');
+          }
+        });
+      }
+    }
+    window.addEventListener('pywebviewready', initPywebview);
+    const initTimer = setInterval(() => {
+      const pwv = window.pywebview || (window.parent && window.parent.pywebview);
+      if (pwv && pwv.api) {
+        clearInterval(initTimer);
+        initPywebview();
+      }
+    }, 100);
+
+    // Device data
+    let devices = [];
+    let currentFilter = 'all';
+    let deleteTargetId = null;
+
+    // Load devices from backend
+    async function loadDevices() {
+      // 1. Load from cache first for instant UI
+      const cached = localStorage.getItem("rootdesk_saved_devices");
+      if (cached) {
+        try {
+          const cachedDevices = JSON.parse(cached);
+          if (Array.isArray(cachedDevices) && cachedDevices.length > 0) {
+            devices = cachedDevices;
+            renderDevices();
+          }
+        } catch(e) { console.error("Cache parse error", e); }
+      }
+
+      // 2. Load from backend
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.get_saved_devices) {
+        try {
+          const res = await window.pywebview.api.get_saved_devices();
+          if (res.success && res.devices) {
+            // Map backend device format to UI format
+            devices = res.devices.map(d => ({
+              id: d.id,
+              name: d.name || `设备 ${d.id}`,
+              deviceId: d.id,
+              password: d.password || '',
+              online: false, 
+              lastSeen: '未知',
+              os: d.os || 'Unknown',
+              note: d.note || '',
+              failCount: 0 // Track consecutive offline checks
+            }));
+            
+            // Update cache
+            localStorage.setItem("rootdesk_saved_devices", JSON.stringify(devices));
+            
+            renderDevices();
+            checkDevicesStatus();
+          }
+        } catch(e) {
+          console.error("Failed to load devices", e);
+        }
+      } else if (!cached) {
+        // Mock data only if no cache
+        devices = [];
+        renderDevices();
+      }
+    }
+
+    async function checkDevicesStatus() {
+      if (devices.length === 0) return;
+      
+      let appUrl = window.location.origin;
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.get_app_url) {
+        try {
+          const data = await window.pywebview.api.get_app_url();
+          if (data && data.url) appUrl = data.url;
+        } catch (e) { console.error(e); }
+      } else if (appUrl.startsWith('file://')) {
+        appUrl = '';
+      }
+
+      // Use the backend API to check online status directly
+      try {
+        const deviceIds = devices.map(d => d.deviceId).join(',');
+        const response = await fetch(`${appUrl}/api/devices/status?ids=${deviceIds}`);
+        if (response.ok) {
+          const statusMap = await response.json();
+          updateDevicesStatusFromMap(statusMap);
+        }
+      } catch(e) {
+        console.error("Failed to check status from server API", e);
+      }
+    }
+
+    function updateDevicesStatusFromMap(statusMap) {
+      let changed = false;
+      devices.forEach(d => {
+        const statusInfo = statusMap[d.deviceId];
+        if (statusInfo && statusInfo.online) {
+          // Device is online
+          if (!d.online) {
+            d.online = true;
+            changed = true;
+          }
+          d.lastSeen = '在线';
+          d.failCount = 0; // Reset fail count
+          
+          if (statusInfo.ip && !d.note.includes(statusInfo.ip)) {
+            d.note = `IP: ${statusInfo.ip}  `;
+            changed = true;
+          }
+        } else {
+          // Device is offline or not found
+          d.failCount = (d.failCount || 0) + 1;
+          
+          // Only set to offline if failed twice
+          if (d.failCount >= 2) {
+            if (d.online) {
+              d.online = false;
+              d.lastSeen = '离线';
+              changed = true;
+            }
+          }
+        }
+      });
+      if (changed) renderDevices();
+    }
+
+    async function saveDevicesToBackend() {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.save_devices) {
+        try {
+          const backendDevices = devices.map(d => ({
+            id: d.deviceId,
+            name: d.name,
+            password: d.password,
+            os: d.os,
+            note: d.note,
+            platform: "pc"
+          }));
+          await window.pywebview.api.save_devices(backendDevices);
+        } catch(e) {
+          console.error("Failed to save devices", e);
+        }
+      }
+    }
+
+
+    // Render devices
+    function renderDevices() {
+      const grid = document.getElementById('deviceGrid');
+      const emptyState = document.getElementById('emptyState');
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+
+      let filteredDevices = devices.filter(device => {
+        const matchesSearch = device.name.toLowerCase().includes(searchTerm) || device.deviceId.includes(searchTerm);
+        const matchesFilter = currentFilter === 'all' || 
+          (currentFilter === 'online' && device.online) || 
+          (currentFilter === 'offline' && !device.online);
+        return matchesSearch && matchesFilter;
+      });
+
+      if (filteredDevices.length === 0) {
+        grid.classList.add('hidden');
+        emptyState.classList.remove('hidden');
+        return;
+      }
+
+      grid.classList.remove('hidden');
+      emptyState.classList.add('hidden');
+
+      grid.innerHTML = filteredDevices.map(device => `
+        <div class="device-card bg-card rounded-xl p-5 border border-border cursor-pointer" onclick="connectDevice('${device.id}')">
+          <div class="flex items-start justify-between mb-4">
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 rounded-lg flex items-center justify-center ${device.online ? 'bg-success/20' : 'bg-border'}">
+                <svg class="w-6 h-6 ${device.online ? 'text-success' : 'text-muted'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="font-medium">${device.name}</h3>
+                <p class="text-sm text-muted font-mono">${device.deviceId}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+              <button onclick="editDevice('${device.id}')" class="p-2 hover:bg-card-hover rounded-lg transition" title="编辑">
+                <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                </svg>
+              </button>
+              <button onclick="deleteDevice('${device.id}')" class="p-2 hover:bg-card-hover rounded-lg transition" title="删除">
+                <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="flex items-center justify-between text-sm">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full ${device.online ? 'bg-success' : 'bg-muted'}"></span>
+              <span class="${device.online ? 'text-success' : 'text-muted'}">${device.lastSeen}</span>
+            </div>
+            <span class="text-muted">${device.os}</span>
+          </div>
+          
+          ${device.note ? `<p class="text-xs text-muted mt-3 pt-3 border-t border-border">${device.note}</p>` : ' '}
+          
+          <button onclick="event.stopPropagation(); quickConnect(devices.find(d => d.id === '${device.id}'))" 
+            class="w-full mt-4 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition text-sm font-medium">
+            快速连接
+          </button>
+        </div>
+      `).join('');
+
+      document.getElementById('deviceCount').textContent = `共 ${devices.length} 台设备`;
+    }
+
+    // Filter functions
+    function setFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        if (btn.dataset.filter === filter) {
+          btn.classList.add('bg-primary/20', 'text-primary');
+          btn.classList.remove('bg-card', 'text-muted');
+        } else {
+          btn.classList.remove('bg-primary/20', 'text-primary');
+          btn.classList.add('bg-card', 'text-muted');
+        }
+      });
+      renderDevices();
+    }
+
+    function filterDevices() {
+      renderDevices();
+    }
+
+    // Modal functions
+    function openAddDeviceModal() {
+      document.getElementById('modalTitle').textContent = '添加设备';
+      document.getElementById('deviceForm').reset();
+      document.getElementById('editDeviceId').value = '';
+      document.getElementById('deviceModal').classList.add('active');
+    }
+
+    function closeDeviceModal() {
+      document.getElementById('deviceModal').classList.remove('active');
+    }
+
+    function editDevice(id) {
+      const device = devices.find(d => d.id === id);
+      if (!device) return;
+
+      document.getElementById('modalTitle').textContent = '编辑设备';
+      document.getElementById('editDeviceId').value = id;
+      document.getElementById('deviceName').value = device.name;
+      document.getElementById('deviceIdInput').value = device.deviceId;
+      document.getElementById('devicePassword').value = device.password || '';
+      document.getElementById('deviceNote').value = device.note || '';
+      document.getElementById('deviceModal').classList.add('active');
+    }
+
+    async function saveDevice() {
+      const editId = document.getElementById('editDeviceId').value;
+      const name = document.getElementById('deviceName').value.trim();
+      const deviceId = document.getElementById('deviceIdInput').value.trim();
+      const password = document.getElementById('devicePassword').value.trim();
+      const note = document.getElementById('deviceNote').value.trim();
+
+      if (!name || !deviceId) {
+        showToast('请填写设备名称和设备ID', 'error');
+        return;
+      }
+
+      if (deviceId.length !== 9 || !/^\d+$/.test(deviceId)) {
+        showToast('设备ID必须是9位数字', 'error');
+        return;
+      }
+
+      if (editId) {
+        const device = devices.find(d => d.id === editId);
+        if (device) {
+          device.name = name;
+          device.deviceId = deviceId;
+          device.password = password;
+          device.note = note;
+        }
+        showToast('设备已更新');
+      } else {
+        const newDevice = {
+          id: deviceId, // Use deviceId as unique id
+          name,
+          deviceId,
+          password,
+          online: false,
+          lastSeen: '刚刚添加',
+          os: '未知',
+          note
+        };
+        // Check if exists
+        if (devices.find(d => d.id === deviceId)) {
+          showToast('设备ID已存在', 'error');
+          return;
+        }
+        devices.push(newDevice);
+        showToast('设备已添加');
+      }
+
+      closeDeviceModal();
+      renderDevices();
+      await saveDevicesToBackend();
+    }
+
+    function deleteDevice(id) {
+      const device = devices.find(d => d.id === id);
+      if (!device) return;
+
+      deleteTargetId = id;
+      document.getElementById('deleteDeviceName').textContent = device.name;
+      document.getElementById('deleteModal').classList.add('active');
+    }
+
+    function closeDeleteModal() {
+      document.getElementById('deleteModal').classList.remove('active');
+      deleteTargetId = null;
+    }
+
+    async function confirmDelete() {
+      if (deleteTargetId) {
+        devices = devices.filter(d => d.id !== deleteTargetId);
+        showToast('设备已删除');
+        renderDevices();
+        await saveDevicesToBackend();
+      }
+      closeDeleteModal();
+    }
+
+    // Connection functions
+    async function connectDevice(id) {
+      const device = devices.find(d => d.id === id);
+      if (device) { // removed device.online check so users can try to connect even if offline, or just to try
+        quickConnect(device);
+      }
+    }
+
+    async function quickConnect(device) {
+      if (!device.password) {
+        showToast('请先编辑设备添加访问密码', 'error');
+        return;
+      }
+      
+      showToast(`正在连接到设备 ${device.deviceId}...`);
+      
+      let appUrl = window.location.origin;
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.get_app_url) {
+        try {
+          const data = await window.pywebview.api.get_app_url();
+          
+          if (data && data.url) {
+            appUrl = data.url;
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      
+      const cleanId = device.deviceId.replace(/\s/g, '');
+      let finalPassword = device.password;
+       
+ 
+      const url = `${appUrl}?deviceId=${cleanId}&password=${finalPassword}&autostart=true`;
+      
+      if (window.pywebview && window.pywebview.api) {
+        //window.pywebview.api.open_browser(url);
+        window.open(url, '_blank');
+      } else {
+        window.open(url, '_blank');
+      }
+    }
+
+    // Toast
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      const toastMessage = document.getElementById('toastMessage');
+      const toastIcon = document.getElementById('toastIcon');
+      
+      toastMessage.textContent = message;
+      toastIcon.className = type === 'success' ? 'w-5 h-5 text-success' : 'w-5 h-5 text-danger';
+      
+      toast.classList.remove('hidden');
+      toast.classList.add('toast');
+      
+      setTimeout(() => {
+        toast.classList.add('hidden');
+        toast.classList.remove('toast');
+      }, 3000);
+    }
+
+    // Call load devices initially and on visibility change
+    loadDevices();
+    checkDevicesStatus();
+    // Refresh status every 10 seconds
+    setInterval(checkDevicesStatus, 10000);
+    
+    // Support visibility change hook from index.html
+    window.onVisibilityChange = function(visible) {
+      if (visible) {
+        loadDevices(); // Reload to get newly added devices and check status
+      }
+    };
+  </script>
+</body>
+</html>

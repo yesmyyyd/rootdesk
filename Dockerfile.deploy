@@ -1,0 +1,17 @@
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# Copy standalone Next.js
+COPY .next/standalone ./
+COPY .next/static ./.next/static
+COPY public ./public
+
+# Copy bundled server
+COPY dist/server/index.js ./server.js
+COPY start.sh ./
+
+RUN chmod +x start.sh
+
+EXPOSE 3000
+
+CMD ["./start.sh"]

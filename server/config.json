@@ -1,0 +1,5 @@
+{
+  "TURN_URL": "turn:121.196.154.6:3478",
+  "TURN_SECRET": "yesmyyyd",
+  "STUN_URL": "stun:121.196.154.6:3478"
+}

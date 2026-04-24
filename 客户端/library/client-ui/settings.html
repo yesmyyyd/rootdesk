@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>设置 - RootDesk</title>
+  <script src="tailwindcss.3.4.17.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            background: '#0a0a0f',
+            foreground: '#e4e4e7',
+            card: '#131318',
+            'card-hover': '#1a1a22',
+            border: '#27272a',
+            primary: '#3b82f6',
+            'primary-hover': '#2563eb',
+            muted: '#71717a',
+            success: '#22c55e',
+            danger: '#ef4444',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    input:focus, button:focus, select:focus { outline: none; }
+    .sidebar-link { transition: all 0.2s; }
+    .sidebar-link:hover { background: #1a1a22; }
+    .sidebar-link.active { background: #1e3a5f; color: #3b82f6; }
+    .settings-nav-item { transition: all 0.2s; }
+    .settings-nav-item:hover { background: #1a1a22; }
+    .settings-nav-item.active { background: #3b82f6; color: white; }
+    .toggle { transition: all 0.2s; }
+    .toggle.active { background: #3b82f6; }
+    .toggle.active .toggle-dot { transform: translateX(20px); }
+    .toggle-dot { transition: all 0.2s; }
+    .input-field:focus { border-color: #3b82f6; }
+    .toast { animation: slideIn 0.3s ease; }
+    @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #131318; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+    select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 16px; }
+  </style>
+</head>
+<body class="bg-background text-foreground min-h-screen bg-transparent">
+  <!-- Main Content -->
+  <main class="flex-1 flex overflow-hidden h-screen">
+      <!-- Settings Navigation -->
+      <div class="w-48 bg-card/50 border-r border-border p-4">
+        <h2 class="text-sm font-medium text-muted mb-4 px-3">设置</h2>
+        <nav class="space-y-1">
+          <button onclick="showSection('general')" class="settings-nav-item active w-full text-left px-3 py-2 rounded-lg text-sm" data-section="general">通用设置</button>
+          <button onclick="showSection('security')" class="settings-nav-item w-full text-left px-3 py-2 rounded-lg text-sm text-muted" data-section="security">安全设置</button>
+          <button onclick="showSection('display')" class="settings-nav-item w-full text-left px-3 py-2 rounded-lg text-sm text-muted" data-section="display">显示设置</button>
+          <button onclick="showSection('network')" class="settings-nav-item w-full text-left px-3 py-2 rounded-lg text-sm text-muted" data-section="network">网络设置</button>
+          <button onclick="showSection('notification')" class="settings-nav-item w-full text-left px-3 py-2 rounded-lg text-sm text-muted" data-section="notification">通知设置</button>
+          <button onclick="showSection('storage')" class="settings-nav-item w-full text-left px-3 py-2 rounded-lg text-sm text-muted" data-section="storage">存储设置</button>
+        </nav>
+      </div>
+
+      <!-- Settings Content -->
+      <div class="flex-1 overflow-auto p-6">
+        <!-- General Settings -->
+        <div id="section-general" class="settings-section">
+          <h1 class="text-xl font-semibold mb-6">通用设置</h1>
+          
+          <div class="space-y-6">
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">基本设置</h3>
+              
+              <div class="space-y-5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">开机自动启动</p>
+                    <p class="text-sm text-muted">系统启动时自动运行 RootDesk</p>
+                  </div>
+                  <button id="autoStartToggle" onclick="toggleSetting('autoStart')" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">最小化到系统托盘</p>
+                    <p class="text-sm text-muted">关闭窗口时最小化到托盘而不是退出</p>
+                  </div>
+                  <button id="trayIconToggle" onclick="toggleSetting('trayIcon')" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">自动检查更新</p>
+                    <p class="text-sm text-muted">定期检查是否有新版本可用</p>
+                  </div>
+                  <button id="autoUpdateToggle" onclick="toggleSetting('autoUpdate')" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">语言和区域</h3>
+              
+              <div class="space-y-4">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">界面语言</label>
+                  <select class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                    <option value="zh-CN">简体中文</option>
+                    <!-- <option value="zh-TW">繁體中文</option>
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option> -->
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Security Settings -->
+        <div id="section-security" class="settings-section hidden">
+          <h1 class="text-xl font-semibold mb-6">安全设置</h1>
+          
+          <div class="space-y-6">
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">访问控制</h3>
+              
+              <div class="space-y-5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">需要确认才能被控制</p>
+                    <p class="text-sm text-muted">远程连接时需要本地确认</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">自动锁定屏幕</p>
+                    <p class="text-sm text-muted">远程连接结束后自动锁定本机</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">访问码自动刷新</p>
+                    <p class="text-sm text-muted">定期自动更换访问码增强安全性</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">访问码设置</h3>
+              
+              <div class="space-y-4">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">访问码刷新周期</label>
+                  <select id="refreshInterval" class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                    <option value="1">每1小时</option>
+                    <option value="6">每6小时</option>
+                    <option value="12" selected>每12小时</option>
+                    <option value="24">每24小时</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="text-sm text-muted mb-2 block">固定访问密码 (可选)</label>
+                  <div class="flex gap-2">
+                    <input type="password" id="fixedPassword" placeholder="设置固定密码后访问码将不再刷新" 
+                      class="input-field flex-1 bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                    <button onclick="savePassword()" class="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-hover transition">保存</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">IP白名单</h3>
+              <p class="text-sm text-muted mb-4">仅允许指定IP地址的设备连接</p>
+              
+              <div class="flex items-center justify-between mb-4">
+                <span class="text-sm">启用IP白名单</span>
+                <button onclick="toggleSwitch(this)" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                  <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                </button>
+              </div>
+
+              <div class="space-y-2">
+                <div class="flex gap-2">
+                  <input type="text" placeholder="输入IP地址" 
+                    class="input-field flex-1 bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder-muted focus:border-primary transition">
+                  <button class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition">添加</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Display Settings -->
+        <div id="section-display" class="settings-section hidden">
+          <h1 class="text-xl font-semibold mb-6">显示设置</h1>
+          
+          <div class="space-y-6">
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">远程画面</h3>
+              
+              <div class="space-y-5">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">画质模式</label>
+                  <select class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                    <option value="auto">自动 (根据网络调整)</option>
+                    <option value="high">高画质</option>
+                    <option value="balanced" selected>平衡</option>
+                    <option value="low">流畅优先</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="text-sm text-muted mb-2 block">帧率限制</label>
+                  <select class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                    <option value="30">30 FPS</option>
+                    <option value="60" selected>60 FPS</option>
+                    <option value="120">120 FPS</option>
+                    <option value="unlimited">不限制</option>
+                  </select>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">显示远程光标</p>
+                    <p class="text-sm text-muted">在远程桌面上显示对方的鼠标光标</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">全屏模式启动</p>
+                    <p class="text-sm text-muted">连接时自动进入全屏模式</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">主题设置</h3>
+              
+              <div class="space-y-4">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">外观主题</label>
+                  <div class="flex gap-3">
+                    <button class="flex-1 p-4 bg-background border-2 border-primary rounded-lg text-center">
+                      <div class="w-8 h-8 bg-zinc-900 rounded mx-auto mb-2"></div>
+                      <span class="text-sm">深色</span>
+                    </button>
+                    <button class="flex-1 p-4 bg-background border border-border rounded-lg text-center hover:border-muted transition">
+                      <div class="w-8 h-8 bg-white rounded mx-auto mb-2"></div>
+                      <span class="text-sm">浅色</span>
+                    </button>
+                    <button class="flex-1 p-4 bg-background border border-border rounded-lg text-center hover:border-muted transition">
+                      <div class="w-8 h-8 bg-gradient-to-r from-zinc-900 to-white rounded mx-auto mb-2"></div>
+                      <span class="text-sm">跟随系统</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Network Settings -->
+        <div id="section-network" class="settings-section hidden">
+          <h1 class="text-xl font-semibold mb-6">网络设置</h1>
+          
+          <div class="space-y-6">
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">连接服务器</h3>
+              <p class="text-sm text-muted mb-4">配置远程控制服务器的连接信息</p>
+              
+              <div class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label class="text-sm text-muted mb-2 block">协议</label>
+                    <select id="serverProtocol" class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                      <option value="ws">WS (不加密)</option>
+                      <option value="wss" selected>WSS (加密)</option>
+                    </select>
+                  </div>
+                  <div class="md:col-span-2">
+                    <label class="text-sm text-muted mb-2 block">服务器地址</label>
+                    <input type="text" id="serverHost" placeholder="例如: rootdesk.cn" 
+                      class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label class="text-sm text-muted mb-2 block">端口</label>
+                    <input type="text" id="serverPort" placeholder="例如: 443" 
+                      class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                  </div>
+                  <div>
+                    <label class="text-sm text-muted mb-2 block">重连间隔 (秒)</label>
+                    <input type="number" id="reconnectInterval" placeholder="5" 
+                      class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-sm text-muted mb-2 block">上线备注</label>
+                  <input type="text" id="serverRemark" placeholder="例如: 我的电脑" 
+                    class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                </div>
+                <button onclick="saveNetworkConfig()" class="w-full py-3 bg-primary text-white font-medium rounded-lg hover:bg-primary-hover transition">
+                  保存并重连
+                </button>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">连接设置</h3>
+              
+              <div class="space-y-5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">优先使用P2P直连</p>
+                    <p class="text-sm text-muted">直接连接可获得更低延迟</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">自动重连</p>
+                    <p class="text-sm text-muted">网络中断后自动尝试重新连接</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">代理设置</h3>
+              
+              <div class="space-y-4">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">代理模式</label>
+                  <select id="proxyMode" onchange="toggleProxySettings()" class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                    <option value="none" selected>不使用代理</option>
+                    <option value="system">使用系统代理</option>
+                    <option value="custom">自定义代理</option>
+                  </select>
+                </div>
+
+                <div id="proxySettings" class="hidden space-y-4">
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label class="text-sm text-muted mb-2 block">代理地址</label>
+                      <input type="text" placeholder="127.0.0.1" 
+                        class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                    </div>
+                    <div>
+                      <label class="text-sm text-muted mb-2 block">端口</label>
+                      <input type="text" placeholder="1080" 
+                        class="input-field w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted focus:border-primary transition">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">带宽设置</h3>
+              
+              <div class="space-y-4">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">上传带宽限制</label>
+                  <select class="w-full bg-background border border-border rounded-lg px-4 py-3 text-foreground focus:border-primary transition pr-10">
+                    <option value="0" selected>不限制</option>
+                    <option value="1">1 Mbps</option>
+                    <option value="5">5 Mbps</option>
+                    <option value="10">10 Mbps</option>
+                    <option value="20">20 Mbps</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Notification Settings -->
+        <div id="section-notification" class="settings-section hidden">
+          <h1 class="text-xl font-semibold mb-6">通知设置</h1>
+          
+          <div class="space-y-6">
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">连接通知</h3>
+              
+              <div class="space-y-5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">有人连接时通知</p>
+                    <p class="text-sm text-muted">当有远程设备连接到本机时显示通知</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">连接断开时通知</p>
+                    <p class="text-sm text-muted">当远程连接断开时显示通知</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">播放提示音</p>
+                    <p class="text-sm text-muted">连接/断开时播放声音提示</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle w-12 h-7 bg-border rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">系统通知</h3>
+              
+              <div class="space-y-5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">版本更新通知</p>
+                    <p class="text-sm text-muted">有新版本时显示更新提示</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Storage Settings -->
+        <div id="section-storage" class="settings-section hidden">
+          <h1 class="text-xl font-semibold mb-6">存储设置</h1>
+          
+          <div class="space-y-6">
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">文件传输</h3>
+              
+              <div class="space-y-4">
+                <div>
+                  <label class="text-sm text-muted mb-2 block">默认下载目录</label>
+                  <div class="flex gap-2">
+                    <input type="text" value="~/Downloads/RootDesk" readonly
+                      class="input-field flex-1 bg-background border border-border rounded-lg px-4 py-3 text-foreground">
+                    <button class="px-4 py-3 bg-card border border-border rounded-lg hover:bg-card-hover transition">浏览</button>
+                  </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">同名文件自动重命名</p>
+                    <p class="text-sm text-muted">下载时遇到同名文件自动添加序号</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">缓存管理</h3>
+              
+              <div class="space-y-4">
+                <div class="flex items-center justify-between p-4 bg-background rounded-lg">
+                  <div>
+                    <p class="font-medium">缓存大小</p>
+                    <p class="text-sm text-muted">包括截图、临时文件等</p>
+                  </div>
+                  <span class="text-primary font-medium">256 MB</span>
+                </div>
+
+                <button onclick="clearCache()" class="w-full py-3 border border-border rounded-lg hover:bg-card-hover transition text-danger">
+                  清除缓存
+                </button>
+              </div>
+            </div>
+
+            <div class="bg-card rounded-xl p-6 border border-border">
+              <h3 class="font-medium mb-4">连接历史</h3>
+              
+              <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium">保存连接历史</p>
+                    <p class="text-sm text-muted">记录最近连接的设备</p>
+                  </div>
+                  <button onclick="toggleSwitch(this)" class="toggle active w-12 h-7 bg-primary rounded-full relative cursor-pointer">
+                    <div class="toggle-dot w-5 h-5 bg-white rounded-full absolute top-1 left-1" style="transform: translateX(20px)"></div>
+                  </button>
+                </div>
+
+                <button onclick="clearHistory()" class="w-full py-3 border border-border rounded-lg hover:bg-card-hover transition">
+                  清除连接历史
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-6 right-6 bg-card border border-border rounded-lg px-4 py-3 shadow-lg hidden">
+    <div class="flex items-center gap-3">
+      <svg id="toastIcon" class="w-5 h-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+      </svg>
+      <span id="toastMessage"></span>
+    </div>
+  </div>
+
+  <script>
+    // Show section
+    function showSection(section) {
+      // Hide all sections
+      document.querySelectorAll('.settings-section').forEach(el => el.classList.add('hidden'));
+      // Show selected section
+      document.getElementById(`section-${section}`).classList.remove('hidden');
+      
+      // Update nav
+      document.querySelectorAll('.settings-nav-item').forEach(btn => {
+        if (btn.dataset.section === section) {
+          btn.classList.add('active', 'bg-primary', 'text-white');
+          btn.classList.remove('text-muted');
+        } else {
+          btn.classList.remove('active', 'bg-primary', 'text-white');
+          btn.classList.add('text-muted');
+        }
+      });
+    }
+
+    // Pywebview Integration
+    let pywebviewReady = false;
+    function initPywebview() {
+      if (pywebviewReady) return;
+      const pwv = window.pywebview || (window.parent && window.parent.pywebview);
+      if (pwv && pwv.api) {
+        pywebviewReady = true;
+        window.pywebview = pwv;
+        
+        window.pywebview.api.get_init_data().then(data => {
+          // Update status in sidebar
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: 'updateStatus',
+              serverConnected: data.serverConnected,
+              role: data.role
+            }, '*');
+          }
+
+          // Update password field
+          if (data.devicePassword) {
+            document.getElementById('fixedPassword').value = data.devicePassword;
+          }
+        });
+
+        // Load network config
+        window.pywebview.api.get_network_config().then(config => {
+          if (config) {
+            document.getElementById('serverProtocol').value = config.protocol || 'wss';
+            document.getElementById('serverHost').value = config.host || '';
+            document.getElementById('serverPort').value = config.port || '';
+            document.getElementById('serverRemark').value = config.remark || '';
+            document.getElementById('reconnectInterval').value = config.reconnectInterval || 5;
+          }
+        });
+
+        // Load general settings
+        window.pywebview.api.get_all_settings().then(settings => {
+          if (settings) {
+            updateToggleUI('autoStartToggle', settings.autoStart);
+            updateToggleUI('trayIconToggle', settings.trayIcon);
+            updateToggleUI('autoUpdateToggle', settings.autoUpdate);
+          }
+        });
+      }
+    }
+    
+    window.addEventListener('pywebviewready', initPywebview);
+    const initTimer = setInterval(() => {
+      const pwv = window.pywebview || (window.parent && window.parent.pywebview);
+      if (pwv && pwv.api) {
+        clearInterval(initTimer);
+        initPywebview();
+      }
+    }, 100);
+
+    function updateToggleUI(id, active) {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      
+      if (active) {
+        btn.classList.add('active', 'bg-primary');
+        btn.classList.remove('bg-border');
+        btn.querySelector('.toggle-dot').style.transform = 'translateX(20px)';
+      } else {
+        btn.classList.remove('active', 'bg-primary');
+        btn.classList.add('bg-border');
+        btn.querySelector('.toggle-dot').style.transform = 'translateX(0)';
+      }
+    }
+
+    function toggleSetting(key) {
+      const btn = document.getElementById(key + 'Toggle');
+      if (!btn) return;
+      
+      const isActive = btn.classList.contains('active');
+      const newValue = !isActive;
+      
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.update_setting(key, newValue).then(res => {
+          if (res.success) {
+            updateToggleUI(key + 'Toggle', newValue);
+            showToast('设置已更新');
+          } else {
+            showToast(res.error || '更新失败', 'error');
+          }
+        });
+      } else {
+        updateToggleUI(key + 'Toggle', newValue);
+        showToast('设置已更新 (演示模式)');
+      }
+    }
+
+    // Save Password
+    function savePassword() {
+      const password = document.getElementById('fixedPassword').value;
+      if (!password) {
+        showToast('请输入密码', 'error');
+        return;
+      }
+      if (password.length < 6) {
+        showToast('密码长度至少为6位', 'error');
+        return;
+      }
+
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.set_password(password).then(res => {
+          if (res.success) {
+            showToast('密码已更新');
+          } else {
+            showToast(res.error || '更新失败', 'error');
+          }
+        });
+      } else {
+        showToast('设置已更新 (演示模式)');
+      }
+    }
+
+    // Save Network Config
+    function saveNetworkConfig() {
+      const protocol = document.getElementById('serverProtocol').value;
+      const host = document.getElementById('serverHost').value;
+      const port = document.getElementById('serverPort').value;
+      const remark = document.getElementById('serverRemark').value;
+      const reconnectInterval = document.getElementById('reconnectInterval').value;
+
+      if (!host || !port) {
+        showToast('请填写完整的服务器信息', 'error');
+        return;
+      }
+
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.update_network_config(protocol, host, port, remark, reconnectInterval).then(res => {
+          if (res.success) {
+            showToast('网络配置已保存，请手动重启程序以生效');
+          } else {
+            showToast(res.error || '保存失败', 'error');
+          }
+        });
+      } else {
+        showToast('网络配置已保存 (演示模式)');
+      }
+    }
+
+    // Toggle switch
+    function toggleSwitch(btn) {
+      btn.classList.toggle('active');
+      if (btn.classList.contains('active')) {
+        btn.classList.remove('bg-border');
+        btn.classList.add('bg-primary');
+        btn.querySelector('.toggle-dot').style.transform = 'translateX(20px)';
+      } else {
+        btn.classList.add('bg-border');
+        btn.classList.remove('bg-primary');
+        btn.querySelector('.toggle-dot').style.transform = 'translateX(0)';
+      }
+      showToast('设置已更新');
+    }
+
+    // Toggle proxy settings
+    function toggleProxySettings() {
+      const mode = document.getElementById('proxyMode').value;
+      const settings = document.getElementById('proxySettings');
+      if (mode === 'custom') {
+        settings.classList.remove('hidden');
+      } else {
+        settings.classList.add('hidden');
+      }
+    }
+
+    // Clear cache
+    function clearCache() {
+      showToast('缓存已清除');
+    }
+
+    // Clear history
+    function clearHistory() {
+      showToast('连接历史已清除');
+    }
+
+    // Toast
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      const toastMessage = document.getElementById('toastMessage');
+      const toastIcon = document.getElementById('toastIcon');
+      
+      toastMessage.textContent = message;
+      toastIcon.className = type === 'success' ? 'w-5 h-5 text-success' : 'w-5 h-5 text-danger';
+      
+      toast.classList.remove('hidden');
+      toast.classList.add('toast');
+      
+      setTimeout(() => {
+        toast.classList.add('hidden');
+        toast.classList.remove('toast');
+      }, 3000);
+    }
+  </script>
+</body>
+</html>
