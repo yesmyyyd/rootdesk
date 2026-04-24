@@ -1,4 +1,4 @@
-# RootDesk: 可能是最优雅的开源 Web 远程控制方案
+# RootDesk: 可能是最优雅的免费开源 Web 远程控制
 
 
 
