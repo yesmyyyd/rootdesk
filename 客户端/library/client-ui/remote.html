@@ -87,10 +87,10 @@
       <div class="p-6">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- Host Info -->
-          <div class="bg-card rounded-xl p-6 border border-border">
+          <div class="bg-card rounded-xl p-6 border border-border flex flex-col">
             <h2 class="text-lg font-semibold mb-6">主机信息</h2>
             
-            <div class="space-y-5">
+            <div class="space-y-5 flex-1">
               <!-- Device ID -->
               <div>
                 <label class="text-sm text-muted mb-2 block">设备ID</label>
@@ -138,6 +138,18 @@
                 </svg>
                 复制设备信息
               </button>
+            </div>
+
+            <!-- Web Console Button -->
+            <div class="mt-8 pt-6 border-t border-border">
+              <button onclick="window.open('https://rootdesk.cn', '_blank');" 
+                class="w-full flex items-center justify-center gap-3 px-4 py-4 bg-primary text-white rounded-xl hover:bg-primary-hover transition-all font-bold shadow-lg shadow-primary/25 group">
+                <svg class="w-6 h-6 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                </svg>
+                <span class="text-lg">打开 Web 控制台</span>
+              </button>
+              <p class="text-center text-xs text-muted mt-3">在浏览器中管理和连接您的设备</p>
             </div>
           </div>
 
