@@ -72,7 +72,7 @@ interface StreamViewProps {
 }
 
 export function StreamView({ device, mode, targetId, onBack, title, subTitle }: StreamViewProps) {
-  const { socket, sendCommand, lastMessage, getTurnConfig } = useWebSocket()
+  const { socket, isConnected, sendCommand, lastMessage, getTurnConfig } = useWebSocket()
   console.log("[StreamView] Component rendered, device:", device.id);
   const { notify } = useNotification()
   const [fullscreen, setFullscreen] = useState(false)
@@ -127,8 +127,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [webrtcState, setWebrtcState] = useState<"connecting" | "connected" | "failed" | "none">("none")
   const [connectionType, setConnectionType] = useState<'internal' | 'external' | null>(null)
   const [reconnectTrigger, setReconnectTrigger] = useState(0)
-  const [showLoadingOverlay, setShowLoadingOverlay] = useState(true)
-  const [loadingStatus, setLoadingStatus] = useState("正在连接P2P...")
+  const [reconnectCount, setReconnectCount] = useState(0)
   const rtcPcRef = useRef<RTCPeerConnection | null>(null)
   const rtcDcRef = useRef<RTCDataChannel | null>(null)
   const [rtcMessage, setRtcMessage] = useState<any>(null)
@@ -153,36 +152,16 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   
   // WebRTC Setup
   useEffect(() => {
-    if (webrtcState === "connected") {
-      setLoadingStatus("P2P连接成功");
-      const timer = setTimeout(() => setShowLoadingOverlay(false), 800);
-      return () => clearTimeout(timer);
-    } else if (webrtcState === "failed") {
-      setLoadingStatus("P2P连接失败，正在使用WebSocket连接...");
-      const timer = setTimeout(() => setShowLoadingOverlay(false), 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [webrtcState]);
-
-  // Timeout for P2P connection
-  useEffect(() => {
-    if (webrtcState === "connecting") {
-      const timer = setTimeout(() => {
-        if (webrtcState === "connecting") {
-          setLoadingStatus("P2P连接超时，正在使用WebSocket连接...");
-          setTimeout(() => setShowLoadingOverlay(false), 1500);
-        }
-      }, 10000); // 10 seconds timeout
-      return () => clearTimeout(timer);
-    }
-  }, [webrtcState]);
-
-  // WebRTC Setup
-  useEffect(() => {
     let pc: RTCPeerConnection | null = null;
     let dc: RTCDataChannel | null = null;
+    let isMounted = true;
 
     const initWebRTC = async () => {
+      if (!isConnected) {
+        console.log("[StreamView] WebRTC waiting for socket connection...");
+        return;
+      }
+      
       console.log("[StreamView] WebRTC init started");
       try {
         setWebrtcState("connecting");
@@ -191,8 +170,10 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
         let iceServers = [];
         try {
           iceServers = await getTurnConfig(device.id, device.password || "");
+          if (!isMounted) return;
           console.log("[WebRTC] Dynamic TURN config received and decrypted");
         } catch (e) {
+          if (!isMounted) return;
           console.warn("[WebRTC] Failed to fetch dynamic TURN config, using fallback", e);
           iceServers = [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -213,6 +194,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
         dc.onopen = () => {
           console.log("[WebRTC] DataChannel opened");
           setWebrtcState("connected");
+          setReconnectCount(0); // Reset retry count on successful connection
         };
 
         dc.onclose = () => {
@@ -330,8 +312,24 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
         };
 
         pc.oniceconnectionstatechange = () => {
+          if (!isMounted) return;
           console.log("[WebRTC] !!! ICE State changed to:", pc?.iceConnectionState);
-          if (pc?.iceConnectionState === "failed" || pc?.iceConnectionState === "disconnected" || pc?.iceConnectionState === "closed") {
+          if (pc?.iceConnectionState === "failed") {
+            setWebrtcState("failed");
+            // If it failed, try to reconnect after a short delay
+            // Limit to 3 automatic retries to avoid infinite loops
+            if (reconnectCount < 3) {
+              console.log(`[WebRTC] Connection failed, scheduling automatic reconnect (${reconnectCount + 1}/3)...`);
+              setTimeout(() => {
+                if (isMounted) {
+                  setReconnectCount(prev => prev + 1);
+                  setReconnectTrigger(prev => prev + 1);
+                }
+              }, 3000);
+            } else {
+              console.warn("[WebRTC] Max reconnect attempts reached");
+            }
+          } else if (pc?.iceConnectionState === "disconnected" || pc?.iceConnectionState === "closed") {
             setWebrtcState("failed");
           }
         };
@@ -364,13 +362,14 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     initWebRTC();
 
     return () => {
+      isMounted = false;
       if (dc) dc.close();
       if (pc) pc.close();
       rtcPcRef.current = null;
       rtcDcRef.current = null;
       setWebrtcState("none");
     };
-  }, [device.id, sendCommand, device.password, reconnectTrigger]);
+  }, [device.id, sendCommand, device.password, reconnectTrigger, isConnected]);
 
   // Fullscreen handling
   useEffect(() => {
@@ -1492,6 +1491,14 @@ useEffect(() => {
     { icon: RotateCcw, label: "刷新", onClick: () => {
         const command = mode === 'screen' ? 'screen' : 'window_stream'
         sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
+        // Force WebRTC reconnect and re-fetch TURN config
+        setReconnectCount(0); // Reset retry count for manual refresh
+        setReconnectTrigger(prev => prev + 1);
+        notify({
+            title: "正在刷新",
+            message: "已重新请求画面并重连P2P",
+            type: "info"
+        });
     } },
     { 
       id: "performance",
@@ -2697,34 +2704,6 @@ useEffect(() => {
         onUnreadChange={setUnreadChatCount} 
         rtcMessage={rtcMessage}
       />
-
-      {/* Connection Loading Overlay */}
-      {showLoadingOverlay && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-md animate-in fade-in duration-300">
-          <div className="flex flex-col items-center gap-6 p-8 rounded-2xl bg-card border shadow-2xl max-w-xs w-full text-center">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-primary/20 border-t-primary animate-spin rounded-full" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Activity className="h-6 w-6 text-primary animate-pulse" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <h3 className="font-semibold text-lg text-foreground">正在建立连接</h3>
-              <p className="text-sm text-muted-foreground animate-pulse">
-                {loadingStatus}
-              </p>
-            </div>
-            <div className="w-full bg-muted h-1.5 rounded-full overflow-hidden">
-              <div 
-                className={cn(
-                  "h-full transition-all duration-500 bg-primary",
-                  webrtcState === 'connected' ? "w-full" : "w-2/3 animate-shimmer"
-                )} 
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* File Upload Progress Overlays */}
       {activeUploads.length > 0 && (

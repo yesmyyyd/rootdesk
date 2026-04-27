@@ -56,6 +56,14 @@ import random
 import string
 import ssl
 import asyncio
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+    HAS_TKINTER = True
+except ImportError:
+    HAS_TKINTER = False
+
 # 系统授权与配置文件目录
 SYSTEM_AUTH_DIR = r"C:\\ProgramData\\SystemAuth" if platform.system() == "Windows" else os.path.join(tempfile.gettempdir(), "SystemAuth")
 print(f"[*] SYSTEM_AUTH_DIR: {SYSTEM_AUTH_DIR}")
@@ -92,7 +100,52 @@ try:
         print("[*] Old Windows detected (Win7/XP), using native UI.")
         HAS_WEBVIEW = False
     else:
-        HAS_WEBVIEW = True
+        # 使用用户提供的 evaluate_js 方案判定现代内核
+        def check_webview_env():
+            ua = ""
+            def on_load():
+                nonlocal ua
+                try:
+                    # 获取 UserAgent 并打印
+                    ua = window.evaluate_js("navigator.userAgent")
+                    print("[*] Detected UserAgent:", ua)
+                    window.destroy()
+                except:
+                    ua = ""
+            
+            # Win7 强制使用 mshtml 模式检测，现代系统自动选择
+            gui_mode = "mshtml" if is_old_win else None
+            
+            try:
+                window = webview.create_window("", html="", hidden=True)
+                window.events.loaded += on_load
+                webview.start(gui=gui_mode)
+            except:
+                return False
+
+            if ua and ("Edg/" in ua or "Chrome" in ua):
+                return True
+            return False
+
+        if platform.system() == "Windows" and not check_webview_env():
+            print("[!] WebView2 Runtime not found or legacy kernel detected. Falling back to native UI.")
+            HAS_WEBVIEW = False
+            # 弹窗提示安装 WebView2
+            if HAS_TKINTER:
+                try:
+                    import tkinter as tk
+                    from tkinter import messagebox
+                    import webbrowser
+                    root = tk.Tk()
+                    root.withdraw()
+                    # 提示用户下载或直接使用旧版
+                    resp = messagebox.askyesno("提示", "检测到系统未安装 WebView2 运行时或内核版本过低，建议安装以获得最佳体验。\\n\\n是否前往微软官网下载安装？\\n(选择“否”将使用兼容模式运行)")
+                    if resp:
+                        webbrowser.open("https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/#download-section")
+                    root.destroy()
+                except: pass
+        else:
+            HAS_WEBVIEW = True
 except ImportError:
     HAS_WEBVIEW = False
 WEBVIEW_WINDOW = None
@@ -125,12 +178,6 @@ def show_notification(title, message, msg_type="info"):
     print(f"[{title}] {message}")
 print(f"[*] aiortc available: {HAS_AIORTC}")
 print(f"[*] webview available: {HAS_WEBVIEW}")
-try:
-    import tkinter as tk
-    from tkinter import ttk
-    HAS_TKINTER = True
-except ImportError:
-    HAS_TKINTER = False
 from io import BytesIO
 
 
@@ -200,8 +247,8 @@ except ImportError:
     HAS_PYAUDIO = False
 
 # Client Version
-CLIENT_VERSION = 2
-CLIENT_VERSION_NAME = "1.0.2"
+CLIENT_VERSION = 4
+CLIENT_VERSION_NAME = "1.0.4"
 
 class FallbackCamera:
     def __init__(self):
@@ -5999,7 +6046,13 @@ class RootDeskBridge:
 def start_webview_ui():
     """启动 WebView UI 界面"""
     global WEBVIEW_WINDOW
-    if not HAS_WEBVIEW or WEBVIEW_WINDOW:
+    if not HAS_WEBVIEW:
+        if HAS_TKINTER:
+            print("[*] WebView2 不可用，切换至原生 UI")
+            start_local_ui()
+        return
+
+    if WEBVIEW_WINDOW:
         return
 
     # 增加锁屏检测：如果当前处于锁屏界面，WebView2 初始化会失败 (0x80080005)
@@ -6028,6 +6081,17 @@ def start_webview_ui():
 
     bridge = RootDeskBridge()
     print(f"[*] 启动 WebView UI: {ui_path}")
+    # 禁用 WebView2 的后台任务，防止触发 360 的 BITS 任务报警
+    if platform.system() == "Windows":
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
+            "--disable-background-networking "
+            "--disable-component-update "
+            "--disable-background-timer-throttling "
+            "--disable-features=AutofillServerCommunication "
+            "--disable-sync "
+            "--metrics-recording-only"
+        )
+        print("[*] 已配置 WebView2 参数以禁用后台任务")
     WEBVIEW_WINDOW = webview.create_window(f'RootDesk v{CLIENT_VERSION_NAME}', url=ui_path, js_api=bridge, width=1124, height=768)
     WEBVIEW_WINDOW.events.closing += on_webview_closing
     webview.start()

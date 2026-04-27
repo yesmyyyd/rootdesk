@@ -1,128 +1,26 @@
-"use client"
-
-import { useState, useCallback, useEffect, Suspense } from "react"
-import { useSearchParams } from "next/navigation"
-import { Sidebar, type TabKey } from "@/components/remote/sidebar"
-import { HeaderBar } from "@/components/remote/header-bar"
-import { DeviceList, type DeviceInfo } from "@/components/remote/device-list"
-import { ScreenPanel } from "@/components/remote/screen-panel"
-import { WindowsPanel } from "@/components/remote/windows-panel"
-import { FilesPanel } from "@/components/remote/files-panel"
-import { TerminalPanel } from "@/components/remote/terminal-panel"
-import { BuilderPanel } from "@/components/remote/builder-panel"
-import { MonitorPanel } from "@/components/remote/monitor-panel"
-
-function RemoteControlContent() {
-  const searchParams = useSearchParams()
-  const showBuilder = searchParams.get("client") === "true"
-  
-  const [activeTab, setActiveTab] = useState<TabKey>("devices")
-  const [selectedDevice, setSelectedDevice] = useState<DeviceInfo | null>(null)
-  
-  // Update browser tab title based on selected device
-  useEffect(() => {
-    if (selectedDevice) {
-      const title = selectedDevice.customTag 
-        ? `${selectedDevice.customTag} - 远程控制中心` 
-        : `${selectedDevice.id} - 远程控制中心`;
-      document.title = title;
-    } else {
-      document.title = "RootDesk - 远程控制中心";
-    }
-  }, [selectedDevice]);
-
-  const handleSelectDevice = useCallback((device: DeviceInfo) => {
-    setSelectedDevice(device)
-    setActiveTab("screen") // default to screen control when selecting a device
-  }, [])
-
-  const handleBackToDevices = useCallback(() => {
-    setSelectedDevice(null)
-    setActiveTab("devices")
-  }, [])
-
-  const isControlMode = selectedDevice !== null && activeTab !== "devices" && activeTab !== "builder"
-
-  return (
-    <div className="flex h-dvh overflow-hidden bg-background">
-      <Sidebar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        selectedDevice={selectedDevice}
-        onBackToDevices={handleBackToDevices}
-        showBuilder={showBuilder}
-      />
-
-      {/* Main content area */}
-      <div className="flex-1 flex flex-col min-w-0 lg:pl-60 transition-all duration-300">
-        <HeaderBar
-          selectedDevice={selectedDevice}
-          onBackToDevices={handleBackToDevices}
-          isControlMode={isControlMode}
-        />
-
-        <main className="flex-1 overflow-hidden">
-          {/* Device list */}
-          {activeTab === "devices" && (
-            <div className="h-full w-full flex flex-col">
-              <div className="flex-1 overflow-hidden">
-                <DeviceList 
-                  onSelectDevice={handleSelectDevice} 
-                  onTabChange={setActiveTab}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Builder Panel */}
-          {activeTab === "builder" && showBuilder && (
-            <div className="h-full w-full">
-              <BuilderPanel />
-            </div>
-          )}
-
-          {/* Control panels - only render when device selected */}
-          {selectedDevice && (
-            <>
-              {activeTab === "screen" && (
-                <div className="h-full w-full">
-                  <ScreenPanel device={selectedDevice} onBack={handleBackToDevices} />
-                </div>
-              )}
-              {activeTab === "windows" && (
-                <div className="h-full w-full">
-                  <WindowsPanel device={selectedDevice} onBack={handleBackToDevices} />
-                </div>
-              )}
-              {activeTab === "files" && (
-                <div className="h-full w-full">
-                  <FilesPanel device={selectedDevice} onBack={handleBackToDevices} />
-                </div>
-              )}
-              {activeTab === "terminal" && (
-                <div className="h-full w-full">
-                  <TerminalPanel device={selectedDevice} onBack={handleBackToDevices} />
-                </div>
-              )}
-              {activeTab === "monitor" && (
-                <div className="h-full w-full">
-                  <MonitorPanel device={selectedDevice} onBack={handleBackToDevices} />
-                </div>
-              )}
-            </>
-          )}
-        </main>
-      </div>
-    </div>
-  )
-}
+import RemoteControlClient from "@/components/remote/remote-control-client"
 
 export default function RemoteControlPage() {
   return (
-    <Suspense fallback={<div className="h-dvh w-full bg-background flex items-center justify-center">
-      <div className="w-8 h-8 border-2 border-primary/20 border-t-primary animate-spin rounded-full" />
-    </div>}>
-      <RemoteControlContent />
-    </Suspense>
+    <>
+      {/* SEO Content for Search Engines like Baidu */}
+      <div className="sr-only">
+        <h1>RootDesk - 专业远程控制与桌面管理平台</h1>
+        <p>
+          RootDesk 是一款高性能、安全可靠的远程控制解决方案，支持桌面管理、实时监控、文件传输与 IT 远程运维。
+          适用于企业办公、远程技术支持及个人设备管理。
+        </p>
+        <ul>
+          <li>远程桌面控制：极速画面传输，低延迟操作体验</li>
+          <li>多终端管理：一键连接，高效管理您的所有设备</li>
+          <li>文件传输：安全稳定的跨设备文件同步与传输</li>
+          <li>实时监控：实时掌握设备状态与性能指标</li>
+          <li>IT远程运维：专业的远程技术支持工具</li>
+        </ul>
+      </div>
+
+      {/* Main Interactive Client Application */}
+      <RemoteControlClient />
+    </>
   )
 }

@@ -1,9 +1,9 @@
 {
-  "downloadUrl": "https://wwanu.lanzoue.com/iqGn33ny0vna",
-  "version": 3,
-  "version_name": "1.0.3",
-  "version_desc": "新增p2p连接，优化客户端界面",
-  "version_url": "https://rootdesk.cn/download/RootDesk1.0.3.exe",
+  "downloadUrl": "https://wwanu.lanzoue.com/ij6Y33nymt5c",
+  "version": 4,
+  "version_name": "1.0.4",
+  "version_desc": "优化p2p连接速度，修复已知问题",
+  "version_url": "https://rootdesk.cn/download/RootDesk1.0.4.exe",
   "version_q": 0,
   "remote": [
     {
