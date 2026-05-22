@@ -102,12 +102,19 @@ export const BaseNodeWrapper: React.FC<BaseNodeProps> = ({
     
     if (isEditing) {
       if (isDragging.current) {
-        isDragging.current = false;
         setIsDraggingState(false);
         setIsDraggingNode(false);
         try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err){}
         
+        // Update parent state first
         updateNode(node.id, { x: localPos.x, y: localPos.y });
+        
+        // Then set isDragging to false to allow the useEffect to sync from props
+        // This prevents a race condition where the useEffect syncs back to old props
+        // before the parent update completes.
+        setTimeout(() => {
+          isDragging.current = false;
+        }, 50);
       }
       return;
     }

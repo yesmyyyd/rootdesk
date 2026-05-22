@@ -112,14 +112,28 @@ export const KeymapProperties: React.FC = () => {
                       </button>
                     </div>
 
-                    <div className="flex-1 grid grid-cols-2 gap-2">
+                    <div className="flex-1">
                       <Select 
-                        value={action.type} 
+                        value={action.type === 'delay' ? 'delay' : ((action.key?.startsWith('Mouse') || ['LButton', 'RButton', 'MButton'].includes(action.key || '')) ? 'mouse' : 'keyboard')} 
                         onValueChange={(val: any) => {
                           const newActions = [...actions];
-                          newActions[index] = { ...newActions[index], type: val };
-                          if (val === 'click' && !newActions[index].key) newActions[index].key = 'A';
-                          if (val === 'delay' && !newActions[index].delay) newActions[index].delay = 100;
+                          if (val === 'delay') {
+                            newActions[index] = { type: 'delay', delay: action.delay || 100 };
+                          } else if (val === 'mouse') {
+                            const defaultX = Math.round((selectedNode.x / 100) * (config.gameResolution?.width || 1920));
+                            const defaultY = Math.round((selectedNode.y / 100) * (config.gameResolution?.height || 1080));
+                            newActions[index] = { 
+                              type: 'click', 
+                              key: (action.key?.startsWith('Mouse') || ['LButton', 'RButton', 'MButton'].includes(action.key || '')) ? action.key : 'LButton',
+                              x: action.x ?? defaultX,
+                              y: action.y ?? defaultY
+                            };
+                          } else { // keyboard
+                            newActions[index] = { 
+                              type: 'click', 
+                              key: (action.key && !action.key.startsWith('Mouse') && !['LButton', 'RButton', 'MButton'].includes(action.key)) ? action.key : 'A'
+                            };
+                          }
                           updateActions(newActions);
                         }}
                       >
@@ -127,42 +141,11 @@ export const KeymapProperties: React.FC = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="z-[110]">
-                          <SelectItem value="click">按键点击</SelectItem>
+                          <SelectItem value="keyboard">按键点击</SelectItem>
+                          <SelectItem value="mouse">鼠标点击</SelectItem>
                           <SelectItem value="delay">等待延迟</SelectItem>
                         </SelectContent>
                       </Select>
-
-                      {action.type === 'click' ? (
-                        <Select 
-                        value={(action.key?.startsWith('Mouse') || ['LButton', 'RButton', 'MButton'].includes(action.key || '')) ? 'mouse' : 'keyboard'} 
-                        onValueChange={(val) => {
-                          const newActions = [...actions];
-                          const defaultX = Math.round((selectedNode.x / 100) * (config.gameResolution?.width || 1920));
-                          const defaultY = Math.round((selectedNode.y / 100) * (config.gameResolution?.height || 1080));
-                          
-                          newActions[index] = { 
-                            ...newActions[index], 
-                            key: val === 'mouse' ? 'LButton' : 'A',
-                            x: val === 'mouse' ? defaultX : undefined,
-                            y: val === 'mouse' ? defaultY : undefined
-                          };
-                          updateActions(newActions);
-                        }}
-                      >
-                          <SelectTrigger className="h-8 bg-slate-900/50 border-slate-700 text-[11px] text-white">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="z-[110]">
-                            <SelectItem value="keyboard">键盘</SelectItem>
-                            <SelectItem value="mouse">鼠标</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <div className="flex items-center gap-1.5 px-2 bg-slate-900/30 rounded border border-slate-800 h-8">
-                          <Clock className="w-3 h-3 text-slate-500" />
-                          <span className="text-[10px] text-slate-500 uppercase font-bold tracking-tight">DELAY</span>
-                        </div>
-                      )}
                     </div>
 
                     <button 

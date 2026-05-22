@@ -362,6 +362,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [showKeymapProperties, setShowKeymapProperties] = useState(false)
   const [executingNodeId, setExecutingNodeId] = useState<string | null>(null)
+  const activeTouchIdRef = useRef<number | null>(null)
 
   const crosshairNode = useMemo(() => {
     return keymapConfig?.nodes?.find((n: any) => n.type === 'crosshair');
@@ -2353,9 +2354,15 @@ useEffect(() => {
         }}
         onTouchStart={(e) => {
           if (isDraggingNode) return;
-          if (e.touches.length === 1) {
+
+          // Identify which touch to use for panning/aiming
+          // If we don't have an active touch, use the one that just started
+          if (activeTouchIdRef.current === null) {
+             const touch = e.changedTouches[0];
+             activeTouchIdRef.current = touch.identifier;
+             
              setIsPanning(true)   
-             setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY })
+             setDragStart({ x: touch.clientX, y: touch.clientY })
              lastTouchTime.current = Date.now()
              isLongPressActive.current = false;
              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
@@ -2381,7 +2388,7 @@ useEffect(() => {
                   setShowTextInput(true);
                }, 600);
              }
-          } else if (e.touches.length === 2 && !crosshairNode) { // Disable multi-touch if crosshair
+          } else if (e.touches.length === 2 && !(!isEditingKeymap && !!crosshairNode)) { // Disable multi-touch if crosshair active
             if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
             setIsDragging(true)
             const dist = Math.hypot(
@@ -2395,10 +2402,28 @@ useEffect(() => {
         }}
         onTouchMove={(e) => {
           if (isDraggingNode) return;
-          if (e.touches.length === 1) {
-            if (isPanning) {
-                let dx = e.touches[0].clientX - dragStart.x
-                let dy = e.touches[0].clientY - dragStart.y
+          
+          // 1. Handle Zoom (Priority: 2 fingers on canvas, no active crosshair)
+          // Only disable zoom if we are NOT editing AND there is a crosshair configured
+          const isCrosshairActive = !isEditingKeymap && !!crosshairNode;
+          if (e.touches.length === 2 && !isCrosshairActive) {
+              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+              const dist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+              )
+              const newZoom = touchStartZoom * (dist / touchStartDist)
+              setZoom(Math.min(3, Math.max(0.5, newZoom)))
+              // If we are zooming, we don't handle panning/aiming in the same frame
+              return;
+          }
+          
+          // 2. Handle Panning/Aiming (Active touch tracking)
+          const touch = Array.from(e.touches).find(t => t.identifier === activeTouchIdRef.current);
+          
+          if (touch && isPanning) {
+                let dx = touch.clientX - dragStart.x
+                let dy = touch.clientY - dragStart.y
 
                 // Crosshair mode: relative mouse move instead of panning
                 if (crosshairNode) {
@@ -2414,7 +2439,7 @@ useEffect(() => {
                         dy: Math.round(dy * sensitivity) 
                     });
                     
-                    setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+                    setDragStart({ x: touch.clientX, y: touch.clientY });
                     return;
                 }
 
@@ -2429,17 +2454,8 @@ useEffect(() => {
                       dy = -temp;
                     }
                     setScrollOffset(prev => getBoundedScrollOffset(prev.x + dx, prev.y + dy, zoom))
-                    setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY })
+                    setDragStart({ x: touch.clientX, y: touch.clientY })
                 }
-            }
-          } else if (e.touches.length === 2 && !crosshairNode) { // Disable zoom if crosshair
-              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-              const dist = Math.hypot(
-                e.touches[0].clientX - e.touches[1].clientX,
-                e.touches[0].clientY - e.touches[1].clientY
-              )
-              const newZoom = touchStartZoom * (dist / touchStartDist)
-              setZoom(Math.min(3, Math.max(0.5, newZoom)))
           }
         }}
         onTouchEnd={(e) => {
@@ -2448,31 +2464,42 @@ useEffect(() => {
                 longPressTimerRef.current = null;
             }
 
-            // Handle Crosshair release
-            if (crosshairNode) {
-                // 1. If click mode, release the button at CURRENT position (don't send coordinates)
-                if (crosshairNode.mode === 'click') {
-                    sendInput('mouseup', { 
-                        button: crosshairNode.button || 'left' 
-                    });
+            // Check if our active touch ended
+            const endedTouch = Array.from(e.changedTouches).find(t => t.identifier === activeTouchIdRef.current);
+
+            if (endedTouch) {
+                activeTouchIdRef.current = null;
+                setIsPanning(false)
+                setIsDragging(false)
+
+                // Handle Crosshair release
+                if (crosshairNode) {
+                    // 1. If click mode, release the button at CURRENT position (don't send coordinates)
+                    if (crosshairNode.mode === 'click') {
+                        sendInput('mouseup', { 
+                            button: crosshairNode.button || 'left' 
+                        });
+                    }
+                    
+                    // 2. Then move back to origin (Commented out based on user request to stay at aim position)
+                    /*
+                    const targetX = crosshairNode.targetX ?? crosshairNode.x;
+                    const targetY = crosshairNode.targetY ?? crosshairNode.y;
+                    const remoteX = Math.round((targetX / 100) * (originalSize?.width || 1920));
+                    const remoteY = Math.round((targetY / 100) * (originalSize?.height || 1080));
+                    sendInput('mousemove', { x: remoteX, y: remoteY });
+                    */
                 }
-                
-                // 2. Then move back to origin
-                const targetX = crosshairNode.targetX ?? crosshairNode.x;
-                const targetY = crosshairNode.targetY ?? crosshairNode.y;
-                const remoteX = Math.round((targetX / 100) * (originalSize?.width || 1920));
-                const remoteY = Math.round((targetY / 100) * (originalSize?.height || 1080));
-                sendInput('mousemove', { x: remoteX, y: remoteY });
             }
 
-            if (!crosshairNode && !isDragging && isPanning && e.changedTouches.length === 1 && e.touches.length === 0) {
+            if (!crosshairNode && !isDragging && endedTouch && e.touches.length === 0) {
                 const now = Date.now()
                 if (!isLongPressActive.current && now - lastTouchTime.current < 500) { // Click threshold
                     if (showTextInput) setShowTextInput(false);
 
                     if (canvasRef.current) {
                         const rect = canvasRef.current.getBoundingClientRect()
-                        const touch = e.changedTouches[0]
+                        const touch = endedTouch;
                         
                         let x = touch.clientX - rect.left
                         let y = touch.clientY - rect.top
@@ -2517,8 +2544,6 @@ useEffect(() => {
                     }
                 }
             }
-            setIsPanning(false)
-            setIsDragging(false)
         }}
         onWheel={(e) => {
           if (e.ctrlKey) {

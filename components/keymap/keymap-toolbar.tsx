@@ -27,7 +27,7 @@ export const KeymapToolbar: React.FC = () => {
       type: 'click',
       x: 50,
       y: 50,
-      size: 48,
+      size: 64,
       key: 'A'
     });
   };
@@ -38,8 +38,8 @@ export const KeymapToolbar: React.FC = () => {
       type: 'joystick',
       x: 50,
       y: 50,
-      size: 120,
-      radius: 60,
+      size: 160,
+      radius: 80,
       keyUp: 'W',
       keyDown: 'S',
       keyLeft: 'A',
@@ -54,7 +54,7 @@ export const KeymapToolbar: React.FC = () => {
       type: 'crosshair',
       x: 50,
       y: 50,
-      size: 48,
+      size: 64,
       key: 'MouseRight',
       sensitivity: 100
     });
@@ -66,7 +66,7 @@ export const KeymapToolbar: React.FC = () => {
       type: 'fire',
       x: 50,
       y: 50,
-      size: 48,
+      size: 64,
       key: 'LButton'
     });
   };
@@ -77,7 +77,7 @@ export const KeymapToolbar: React.FC = () => {
       type: 'swipe',
       x: 50,
       y: 50,
-      size: 48,
+      size: 64,
       key: 'Shift',
       endX: 60,
       endY: 40,
@@ -92,7 +92,7 @@ export const KeymapToolbar: React.FC = () => {
       type: 'skill',
       x: 50,
       y: 50,
-      size: 48,
+      size: 64,
       key: 'Q',
       castType: 'release',
       castRadius: 50
