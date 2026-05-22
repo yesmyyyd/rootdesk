@@ -138,7 +138,7 @@ export const KeymapToolbar: React.FC = () => {
           <TooltipContent side="right">准星键</TooltipContent>
         </Tooltip>
 
-        <Tooltip>
+        {/* <Tooltip>
           <TooltipTrigger asChild>
             <div className="flex flex-col items-center gap-0.5 sm:gap-1 group cursor-pointer shrink-0" onClick={handleAddFire}>
               <Button variant="ghost" size="icon" className="group-hover:bg-red-500/20 rounded-lg sm:rounded-xl h-8 w-8 sm:h-10 sm:w-10 transition-all active:scale-90">
@@ -172,7 +172,7 @@ export const KeymapToolbar: React.FC = () => {
             </div>
           </TooltipTrigger>
           <TooltipContent side="right">技能施法</TooltipContent>
-        </Tooltip>
+        </Tooltip> */}
       </TooltipProvider>
     </div>
   );
