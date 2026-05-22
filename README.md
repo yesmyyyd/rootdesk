@@ -100,25 +100,13 @@ Windows 7 / 8 / 10 / 11（x64/x86 架构），确保系统已安装 Python 3.8.1
 
 ## 📦 客户端第三方依赖说明
 
-本文档简要说明项目所用第三方工具的官方来源、用途与授权，所有组件均为官方原版，无篡改、无捆绑，来源可溯源、合规安全。
+<small>所有组件均为官方原版，无篡改、无捆绑，来源可溯源、合规安全。</small>
 
----
-
-### 1. Interception (install-interception.exe 键鼠驱动)
-- **用途**：开源 Windows 底层键鼠监听、输入模拟驱动，用于项目系统级输入控制。
-- **开源仓库/下载源**：[https://github.com/oblitum/Interception](https://github.com/oblitum/Interception)
-
----
-
-### 2. PsExec (系统远程执行工具)
-- **用途**：微软官方工具，用于 Windows 本地/远程高权限进程调用、系统指令执行。
-- **官方文档**：[https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec](https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec)
-
----
-
-### 3. NSSM (Windows 服务托管工具)
-- **用途**：开源轻量服务托管工具，用于将程序封装为系统服务，实现后台常驻、崩溃自动重启。
-- **官方下载页**：[https://nssm.cc/download](https://nssm.cc/download)
+| 组件名称 | 用途说明 | 官方来源 / 源码仓库 |
+| :--- | :--- | :--- |
+| **Interception** | 开源 Windows 底层键鼠监听、输入模拟驱动，用于系统级输入控制 | [oblitum/Interception](https://github.com/oblitum/Interception) |
+| **PsExec** | 微软官方工具，用于 Windows 本地/远程高权限进程调用、指令执行 | [Microsoft Docs](https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec) |
+| **NSSM** | 开源轻量服务托管工具，用于将程序封装为系统服务，实现常驻运行 | [nssm.cc](https://nssm.cc/download) |
 
 ---
 
