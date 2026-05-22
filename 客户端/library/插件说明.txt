@@ -1,0 +1,18 @@
+本文档简要说明项目所用第三方工具的官方来源、用途与授权，所有组件均为官方原版，无篡改、无捆绑，来源可溯源、合规安全。
+
+---
+1. Interception（install-interception.exe 键鼠驱动）
+用途：开源 Windows 底层键鼠监听、输入模拟驱动，用于项目系统级输入控制。
+开源仓库/下载源：https://github.com/oblitum/Interception
+
+
+---
+2. PsExec（系统远程执行工具）
+用途：微软官方工具，用于 Windows 本地/远程高权限进程调用、系统指令执行。
+官方文档：https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec
+
+
+---
+3. NSSM（Windows 服务托管工具）
+用途：开源轻量服务托管工具，用于将程序封装为系统服务，实现后台常驻、崩溃自动重启。
+官方下载页：https://nssm.cc/download

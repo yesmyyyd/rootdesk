@@ -98,6 +98,30 @@ Windows 7 / 8 / 10 / 11（x64/x86 架构），确保系统已安装 Python 3.8.1
 
 ---
 
+## 📦 客户端第三方依赖说明
+
+本文档简要说明项目所用第三方工具的官方来源、用途与授权，所有组件均为官方原版，无篡改、无捆绑，来源可溯源、合规安全。
+
+---
+
+### 1. Interception (install-interception.exe 键鼠驱动)
+- **用途**：开源 Windows 底层键鼠监听、输入模拟驱动，用于项目系统级输入控制。
+- **开源仓库/下载源**：[https://github.com/oblitum/Interception](https://github.com/oblitum/Interception)
+
+---
+
+### 2. PsExec (系统远程执行工具)
+- **用途**：微软官方工具，用于 Windows 本地/远程高权限进程调用、系统指令执行。
+- **官方文档**：[https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec](https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec)
+
+---
+
+### 3. NSSM (Windows 服务托管工具)
+- **用途**：开源轻量服务托管工具，用于将程序封装为系统服务，实现后台常驻、崩溃自动重启。
+- **官方下载页**：[https://nssm.cc/download](https://nssm.cc/download)
+
+---
+
 ## ⚔️ RootDesk 对比 ToDesk 核心优势
 
 ToDesk 作为主流远程控制工具，虽具备基础远控功能，但在隐私安全、功能灵活性及成本控制上存在明显局限，RootDesk 针对性突破 these 痛点，更适配开发者、工作室及小型企业的核心需求：
