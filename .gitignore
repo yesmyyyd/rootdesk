@@ -2,5 +2,11 @@ node_modules/
 .next/
 .env*.local
 .DS_Store
-/客户端/dist
 server/data
+/客户端/dist
+/客户端/build
+/客户端/client.spec
+/客户端/__pycache__
+/客户端/test.py
+/客户端/1.py
+/客户端/*.spec

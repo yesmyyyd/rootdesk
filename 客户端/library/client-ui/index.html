@@ -246,7 +246,7 @@
       if (serverConnected) {
         statusDot.classList.remove('bg-danger');
         statusDot.classList.add('bg-success');
-        statusText.textContent = `主机: 已连接 [${role}]`;
+        statusText.textContent = `主机: 已连接`;
       } else {
         statusDot.classList.remove('bg-success');
         statusDot.classList.add('bg-danger');
@@ -258,8 +258,8 @@
     window.addEventListener('pywebviewready', function() {
       // Periodic check for updates
       checkUpdatesBackground();
-      //setInterval(checkUpdatesBackground, 60000 * 10); // Check every 10 minutes
-      setInterval(checkUpdatesBackground, 8000);
+      setInterval(checkUpdatesBackground, 60000 * 10); // Check every 10 minutes
+      //setInterval(checkUpdatesBackground, 8000);
       // Update global status
       if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.get_init_data().then(data => {

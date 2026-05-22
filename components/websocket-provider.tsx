@@ -246,32 +246,39 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
             confirmText: '接受',
             cancelText: '拒绝',
             onConfirm: () => {
-              // 1. Add to savedDevices
-              const saved = localStorage.getItem("rootdesk_devices_cache") || localStorage.getItem("rootdesk_saved_devices");
+              // 1. Save to localStorage
+              const saved = localStorage.getItem("rootdesk_saved_devices");
               let savedDevices = [];
               if (saved) {
                 try { savedDevices = JSON.parse(saved); } catch (e) {}
               }
               
               const cleanId = data.deviceId.replace(/\s/g, '');
-              const exists = savedDevices.some((d: any) => d.id === cleanId);
+              const existingIdx = savedDevices.findIndex((d: any) => d.id === cleanId);
               
-              if (!exists) {
+              if (existingIdx === -1) {
                 const newDevice = {
                   id: cleanId,
                   password: data.password,
                   hostname: data.info?.hostname || "Assisted Device",
                   remark: "协助请求添加",
                   platform: data.info?.platform || "pc",
+                  lastOnlineTime: Date.now(),
                   tags: []
                 };
                 savedDevices.push(newDevice);
-                localStorage.setItem("rootdesk_devices_cache", JSON.stringify(savedDevices));
                 localStorage.setItem("rootdesk_saved_devices", JSON.stringify(savedDevices));
                 
                 // Trigger a refresh of the device list in the UI
                 window.dispatchEvent(new CustomEvent('rootdesk_device_added', { detail: newDevice }));
                 window.dispatchEvent(new Event('storage'));
+              } else {
+                // Device already exists, maybe update the password if it's currently empty
+                if (!savedDevices[existingIdx].password && data.password) {
+                  savedDevices[existingIdx].password = data.password;
+                  localStorage.setItem("rootdesk_saved_devices", JSON.stringify(savedDevices));
+                  window.dispatchEvent(new Event('storage'));
+                }
               }
 
               // 2. Send response

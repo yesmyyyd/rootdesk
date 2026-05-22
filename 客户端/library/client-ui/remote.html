@@ -142,7 +142,7 @@
 
             <!-- Web Console Button -->
             <div class="mt-8 pt-6 border-t border-border">
-              <button onclick="window.open('https://rootdesk.cn', '_blank');" 
+              <button onclick="if(window.pywebview && window.pywebview.api) { window.pywebview.api.open_web_console(); } else { window.open('https://rootdesk.cn', '_blank'); }" 
                 class="w-full flex items-center justify-center gap-3 px-4 py-4 bg-primary text-white rounded-xl hover:bg-primary-hover transition-all font-bold shadow-lg shadow-primary/25 group">
                 <svg class="w-6 h-6 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
@@ -154,16 +154,36 @@
           </div>
 
           <!-- Connected Clients -->
-          <div class="bg-card rounded-xl p-6 border border-border">
-            <h2 class="text-lg font-semibold mb-6">已连接的客户端</h2>
+          <div class="bg-card rounded-xl p-6 border border-border flex flex-col">
+            <h2 class="text-lg font-semibold mb-6">控制端列表</h2>
             
-            <div id="connectedClients" class="flex flex-col items-center justify-center h-48 text-muted">
-              <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
-                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
-                </svg>
+            <div id="connectedClients" class="flex flex-col h-32 overflow-y-auto mb-4">
+              <div class="flex flex-col items-center justify-center h-full text-muted">
+                <div class="w-12 h-12 bg-border rounded-full flex items-center justify-center mb-2">
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+                  </svg>
+                </div>
+                <p class="text-xs">暂无控制端连接</p>
               </div>
-              <p>暂无客户端连接</p>
+            </div>
+
+            <!-- Invite Assistance Area -->
+            <div class="mt-auto pt-4 border-t border-border">
+              <h3 class="text-sm font-medium mb-3 flex items-center gap-2">
+                <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                </svg>
+                邀请对方协助
+              </h3>
+              <div class="flex gap-2">
+                <input type="text" id="assistanceCode" placeholder="输入对方协助码" 
+                  class="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:border-primary transition outline-none">
+                <button onclick="inviteAssistance()" class="px-4 py-2 bg-primary/10 text-primary hover:bg-primary hover:text-white rounded-lg text-sm font-medium transition whitespace-nowrap">
+                  邀请
+                </button>
+              </div>
+              <p class="text-[10px] text-muted mt-2">协助码由对方 Web 控制端顶部显示</p>
             </div>
           </div>
 
@@ -198,17 +218,47 @@
             </div>
           </div>
 
-          <!-- My Remote Connections -->
+          <!-- My Remote Connections (Controlled History) -->
           <div class="bg-card rounded-xl p-6 border border-border">
-            <h2 class="text-lg font-semibold mb-6">我的远程连接</h2>
-            
-            <div id="myConnections" class="flex flex-col items-center justify-center h-48 text-muted">
-              <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
-                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
+            <div class="flex items-center justify-between mb-6">
+              <h2 class="text-lg font-semibold">被控记录</h2>
+              <div class="flex items-center gap-2">
+                <button onclick="prevHistoryPage()" class="p-1 hover:bg-border rounded transition text-muted hover:text-foreground">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                  </svg>
+                </button>
+                <span id="historyPageInfo" class="text-xs text-muted">1 / 1</span>
+                <button onclick="nextHistoryPage()" class="p-1 hover:bg-border rounded transition text-muted hover:text-foreground">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                  </svg>
+                </button>
               </div>
-              <p>暂无远程连接</p>
+            </div>
+            
+            <div id="myConnections" class="overflow-x-auto min-h-48">
+              <table class="w-full text-sm text-left">
+                <thead class="text-xs text-muted uppercase bg-card/50 border-b border-border">
+                  <tr>
+                    <th class="px-3 py-2">开始时间</th>
+                    <th class="px-3 py-2">结束时间</th>
+                    <th class="px-3 py-2">时长</th>
+                    <th class="px-3 py-2">IP地址</th>
+                  </tr>
+                </thead>
+                <tbody id="historyTableBody">
+                  <!-- History items will be inserted here -->
+                </tbody>
+              </table>
+              <div id="noHistory" class="flex flex-col items-center justify-center h-48 text-muted">
+                <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                </div>
+                <p>暂无被控记录</p>
+              </div>
             </div>
           </div>
         </div>
@@ -411,22 +461,7 @@
             warningContainer.classList.add('hidden');
           }
           
-          const statusDot = document.querySelector('.bg-success.rounded-full');
-          const statusText = document.querySelector('aside .text-xs.text-muted span:last-child');
-          
-          if (statusDot && statusText) {
-            if (data.serverConnected) {
-              statusDot.classList.remove('bg-danger');
-              statusDot.classList.add('bg-success');
-              statusText.textContent = `主机: 已连接 [${data.role}]`;
-            } else {
-              statusDot.classList.remove('bg-success');
-              statusDot.classList.add('bg-danger');
-              statusText.textContent = '主机: 未连接';
-            }
-          }
-
-          // Notify parent frame to update status
+          // Update status in parent if needed
           if (window.parent && window.parent !== window) {
             window.parent.postMessage({
               type: 'updateStatus',
@@ -435,32 +470,112 @@
             }, '*');
           }
           
-          // Update control status
-          const ctrlLabel = document.getElementById('connectedClients');
-          if (data.viewerCount > 0) {
-             ctrlLabel.innerHTML = `
-               <div class="flex flex-col items-center">
-                 <div class="w-16 h-16 bg-primary/20 rounded-full flex items-center justify-center mb-4 pulse">
-                   <svg class="w-8 h-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+          // Update active controllers list
+          const ctrlContainer = document.getElementById('connectedClients');
+          const controllers = data.activeControllers || [];
+          
+          if (controllers.length > 0) {
+            let html = '<div class="space-y-2">';
+            const nowTs = Date.now() / 1000;
+            
+            controllers.forEach(c => {
+              // Calculate live duration
+              let durationStr = '--:--';
+              if (c.start_timestamp) {
+                const diff = Math.floor(nowTs - c.start_timestamp);
+                const h = Math.floor(diff / 3600);
+                const m = Math.floor((diff % 3600) / 60);
+                const s = diff % 60;
+                durationStr = h > 0 ? 
+                  `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` :
+                  `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+              }
+
+              html += `
+                <div class="flex items-center justify-between p-3 bg-background border border-border rounded-lg">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 bg-primary/20 rounded-full flex items-center justify-center">
+                      <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <div class="text-sm font-medium">控制端: ${c.ip}</div>
+                      <div class="text-[10px] text-muted">时长: <span class="text-success font-mono">${durationStr}</span> | 进入: ${c.start_time}</div>
+                    </div>
+                  </div>
+                  <span class="px-2 py-0.5 bg-success/10 text-success text-[10px] rounded-full pulse">正在控制</span>
+                </div>
+              `;
+            });
+            html += '</div>';
+            ctrlContainer.innerHTML = html;
+          } else {
+            ctrlContainer.innerHTML = `
+               <div class="flex flex-col items-center justify-center h-full text-muted">
+                 <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
+                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
                    </svg>
                  </div>
-                 <p class="text-primary font-medium">正在被控制</p>
-                 <p class="text-xs mt-1">${data.viewerCount} 个控制端正在查看</p>
+                 <p>暂无控制端连接</p>
                </div>
-             `;
-          } else {
-             ctrlLabel.innerHTML = `
-               <div class="w-16 h-16 bg-border rounded-full flex items-center justify-center mb-4">
-                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
-                 </svg>
-               </div>
-               <p>暂无客户端连接</p>
-             `;
+            `;
           }
         });
+
+        // Update connection history periodically or when page changes
+        updateHistory();
+      }
+    }
+
+    let currentHistoryPage = 1;
+    let totalHistoryPages = 1;
+    function updateHistory() {
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_connection_history(currentHistoryPage, 10).then(res => {
+          const tbody = document.getElementById('historyTableBody');
+          const noHistory = document.getElementById('noHistory');
+          const pageInfo = document.getElementById('historyPageInfo');
+          
+          if (res.success && res.history && res.history.length > 0) {
+            noHistory.classList.add('hidden');
+            tbody.innerHTML = '';
+            res.history.forEach(item => {
+              const row = document.createElement('tr');
+              row.className = 'border-b border-border hover:bg-card-hover transition';
+              row.innerHTML = `
+                <td class="px-3 py-2 text-xs">${item.start}</td>
+                <td class="px-3 py-2 text-xs">${item.end}</td>
+                <td class="px-3 py-2 text-xs text-success">${item.duration || '--'}</td>
+                <td class="px-3 py-2 text-xs text-primary font-mono">${item.ip}</td>
+              `;
+              tbody.appendChild(row);
+            });
+            
+            totalHistoryPages = Math.ceil(res.total / 10) || 1;
+            pageInfo.textContent = `${currentHistoryPage} / ${totalHistoryPages}`;
+          } else {
+            tbody.innerHTML = '';
+            noHistory.classList.remove('hidden');
+            pageInfo.textContent = '1 / 1';
+            totalHistoryPages = 1;
+          }
+        });
+      }
+    }
+
+    function prevHistoryPage() {
+      if (currentHistoryPage > 1) {
+        currentHistoryPage--;
+        updateHistory();
+      }
+    }
+
+    function nextHistoryPage() {
+      if (currentHistoryPage < totalHistoryPages) {
+        currentHistoryPage++;
+        updateHistory();
       }
     }
 
@@ -688,6 +803,28 @@
 
     function retryConnection() {
       connectToRemote();
+    }
+
+    function inviteAssistance() {
+      const code = document.getElementById('assistanceCode').value;
+      if (!code) {
+        showToast('请输入协助码', 'error');
+        return;
+      }
+      
+      if (window.pywebview && window.pywebview.api) {
+        showToast('正在发送邀请...', 'info');
+        window.pywebview.api.invite_assistance(code).then(res => {
+          if (res.success) {
+            showToast('邀请已发送，请等待对方接受');
+            document.getElementById('assistanceCode').value = '';
+          } else {
+            showToast('发送邀请失败: ' + res.error, 'danger');
+          }
+        });
+      } else {
+        showToast('环境不支持协助功能', 'error');
+      }
     }
   </script>
 </body>

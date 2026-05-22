@@ -79,6 +79,7 @@ export interface DeviceInfo {
   viewerCount?: number
   remark?: string
   customTag?: string
+  lastOnlineTime?: number
 }
 
 function getDeviceIcon(type: DeviceInfo["type"]) {
@@ -162,10 +163,17 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   // ToDesk-like state
   const [savedDevices, setSavedDevices] = useState<any[]>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem("rootdesk_devices_cache") || localStorage.getItem("rootdesk_saved_devices")
+      const saved = localStorage.getItem("rootdesk_saved_devices")
       if (saved) {
         try {
-          return JSON.parse(saved)
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed)) {
+            // Data migration: ensure all IDs are cleaned of spaces
+            return parsed.map((d: any) => ({
+              ...d,
+              id: d.id ? d.id.replace(/\s/g, '') : ''
+            }))
+          }
         } catch (e) {
           console.error("Failed to parse saved devices from localStorage", e)
         }
@@ -210,10 +218,17 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   // Load saved devices and tags
   useEffect(() => {
     const loadSaved = () => {
-      const saved = localStorage.getItem("rootdesk_devices_cache") || localStorage.getItem("rootdesk_saved_devices")
+      const saved = localStorage.getItem("rootdesk_saved_devices")
       if (saved) {
         try {
-          setSavedDevices(JSON.parse(saved))
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed)) {
+            const cleaned = parsed.map((d: any) => ({
+              ...d,
+              id: d.id ? d.id.replace(/\s/g, '') : ''
+            }))
+            setSavedDevices(cleaned)
+          }
         } catch (e) {
           console.error("Failed to parse saved devices", e)
         }
@@ -279,7 +294,6 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   useEffect(() => {
     if (!isLoading) {
       const data = JSON.stringify(savedDevices)
-      localStorage.setItem("rootdesk_devices_cache", data)
       localStorage.setItem("rootdesk_saved_devices", data)
       
       // Show download guide if no devices after initial load
@@ -294,9 +308,10 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
 
   // Helper to merge device info safely without overwriting with "Unknown" or missing data
   const mergeDeviceInfo = (oldDevice: any, newData: any) => {
+    // Ensure we have the latest password and other manual fields
     const merged = { ...oldDevice };
     
-    // List of metadata fields to sync safely
+    // List of metadata fields to sync safely from server
     const fields = ['os', 'arch', 'resolution', 'ip', 'publicIp', 'location', 'isp', 'platform', 'remark', 'hostname', 'cpu', 'ram', 'disk'];
     
     fields.forEach(field => {
@@ -315,6 +330,20 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
           merged[field] = newVal;
         }
       });
+    }
+
+    // NEVER overwrite an existing password with an empty one from server
+    if (!merged.password && newData.password) {
+      merged.password = newData.password;
+    }
+
+    // Update lastOnlineTime if device is online or idle
+    // Only update if it's been more than 30 seconds to avoid frequent localStorage writes
+    if (newData.status === 'online' || newData.status === 'idle') {
+      const now = Date.now();
+      if (!merged.lastOnlineTime || now - merged.lastOnlineTime > 30000) {
+        merged.lastOnlineTime = now;
+      }
     }
     
     return merged;
@@ -367,7 +396,14 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
       const d = { ...saved };
       
       // Real-time status and usage data
-      const status = online?.status || "offline";
+      let status = online?.status || "offline";
+      
+      // If offline but was online within 1 minute, set to online
+      // This handles page refreshes where the WebSocket status might not have arrived yet
+      if (status === "offline" && d.lastOnlineTime && Date.now() - d.lastOnlineTime < 60000) {
+        status = "online";
+      }
+
       const os = d.os || "Unknown";
       const platform = d.platform || "pc";
 
@@ -443,26 +479,38 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
 
     if (deviceId && password) {
       const cleanId = deviceId.replace(/\s/g, '');
-      const exists = savedDevices.some(d => d.id === cleanId);
+      const existingIndex = savedDevices.findIndex(d => d.id === cleanId);
 
       if (autostart) {
         autoStartDeviceIdRef.current = cleanId;
       }
 
-      if (!exists) {
+      if (existingIndex === -1) {
         console.log("Quick adding device from URL:", cleanId);
         setIsVerifying(true);
         setNewDeviceId(deviceId); // For state tracking in auth handlers
         setNewPassword(password);
         authenticateDevice(cleanId, password);
       } else {
-        // If it exists and autostart is true, trigger prompt if online
-        if (autostart) {
-            const device = mappedDevices.find(d => d.id === cleanId);
-            if (device && device.status !== 'offline') {
-                showAutoStartPrompt(device);
-                autoStartDeviceIdRef.current = null;
-            }
+        // If it exists, update password and re-authenticate to refresh status
+        const existingDevice = savedDevices[existingIndex];
+        if (existingDevice.password !== password) {
+          console.log("Updating password for existing device from URL:", cleanId);
+          setSavedDevices(prev => {
+            const updated = [...prev];
+            updated[existingIndex] = { ...updated[existingIndex], password: password };
+            return updated;
+          });
+          authenticateDevice(cleanId, password);
+        } else {
+          // If it exists and autostart is true, trigger prompt if online
+          if (autostart) {
+              const device = mappedDevices.find(d => d.id === cleanId);
+              if (device && device.status !== 'offline') {
+                  showAutoStartPrompt(device);
+                  autoStartDeviceIdRef.current = null;
+              }
+          }
         }
       }
       
@@ -480,7 +528,10 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
     if (!lastMessage || lastMessage === lastHandledMessageRef.current) return
     lastHandledMessageRef.current = lastMessage
     
-    console.log("lastMessage received in DeviceList:", lastMessage);
+    // Only log meaningful messages to reduce console noise
+    if (['device_auth_success', 'device_auth_error', 'session_invalidated', 'error'].includes(lastMessage.type)) {
+      console.log("lastMessage received in DeviceList:", lastMessage);
+    }
     
     if (lastMessage.type === 'session_invalidated') {
         // Handled globally in WebSocketProvider
@@ -520,6 +571,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
             id: deviceId,
             password: newPassword,
             name: "", // Default to empty so it uses ID as fallback
+            lastOnlineTime: Date.now(),
             ...deviceInfo
           }];
         }
@@ -573,7 +625,20 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
     }
   }, [lastMessage, savedDevices, newDeviceId, newPassword, isVerifying, verifyingDeviceId, notify, setSavedDevices, setAddDialogOpen, setNewDeviceId, setNewPassword, setVerifyingDeviceId, setIsVerifying, mappedDevices, onSelectDevice])
 
+  const checkConnection = useCallback(() => {
+    if (!isConnected) {
+      notify({
+        title: "请稍候",
+        message: "正在连接服务器，请连接成功后再试",
+        type: "warning"
+      })
+      return false
+    }
+    return true
+  }, [isConnected, notify])
+
   const handleEditPassword = (device: DeviceInfo) => {
+    if (!checkConnection()) return
     setEditDeviceId(device.id)
     setNewPassword("")
     setEditPasswordDialogOpen(true)
@@ -589,11 +654,12 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
       return
     }
 
-    const updatedDevices = savedDevices.map(d => 
-      d.id === editDeviceId ? { ...d, password: newPassword } : d
-    )
-    setSavedDevices(updatedDevices)
-    localStorage.setItem("rootdesk_devices_cache", JSON.stringify(updatedDevices))
+    setSavedDevices(prev => {
+      const updated = prev.map(d => 
+        d.id === editDeviceId ? { ...d, password: newPassword } : d
+      )
+      return updated
+    })
     
     // 发送刷新状态请求以验证新密码并更新在线状态
     sendMessage({
@@ -612,6 +678,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   }
 
   const handleAddDevice = () => {
+    if (!checkConnection()) return
     const cleanDeviceId = newDeviceId.replace(/\s/g, '')
     if (!cleanDeviceId || !newPassword) {
       notify({
@@ -627,6 +694,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   }
 
   const handleConnect = (device: DeviceInfo) => {
+    if (!checkConnection()) return
     setVerifyingDeviceId(device.id)
     authenticateDevice(device.id, device.password || '')
   }
@@ -668,6 +736,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   const offlineCount = mappedDevices.filter(d => d.status === "offline").length
 
   const handleManualRefresh = () => {
+    if (!checkConnection()) return
     savedDevices.forEach(device => {
       sendMessage({
         type: 'refresh_device_status',
@@ -711,6 +780,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
   }
 
   const handleDeviceClick = (device: DeviceInfo) => {
+    if (!checkConnection()) return
     if (device.status === "offline") {
       notify({
         title: "无法连接",
@@ -728,6 +798,12 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-card shrink-0">
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-medium text-foreground">设备列表</h2>
+          {!isConnected && (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-warning/10 text-warning text-[10px] font-medium animate-pulse">
+              <RotateCcw className="h-3 w-3 animate-spin" />
+              正在连接服务器...
+            </div>
+          )}
           <div className="hidden sm:flex items-center gap-1.5">
             <Badge variant="outline" className="text-[10px] h-5 bg-success/10 text-success border-success/20">{onlineCount} 在线</Badge>
             <Badge variant="outline" className="text-[10px] h-5 bg-muted text-muted-foreground border-border">{offlineCount} 离线</Badge>
@@ -938,6 +1014,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-xs focus:bg-secondary focus:text-secondary-foreground" onClick={(e) => {
                             e.stopPropagation();
+                            if (!checkConnection()) return;
                             sendCommand(device.id, device.password || '', 'exec', 'shutdown /r /t 0');
                             notify({
                               title: "指令已发送",
@@ -949,6 +1026,7 @@ function DeviceListContent({ onSelectDevice, onTabChange }: DeviceListProps) {
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-xs focus:bg-secondary focus:text-secondary-foreground" onClick={(e) => {
                             e.stopPropagation();
+                            if (!checkConnection()) return;
                             sendCommand(device.id, device.password || '', 'exec', 'rundll32.exe user32.dll,LockWorkStation');
                             notify({
                               title: "指令已发送",

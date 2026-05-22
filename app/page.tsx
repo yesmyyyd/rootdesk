@@ -4,6 +4,10 @@ export default function RemoteControlPage() {
   return (
     <>
       {/* SEO Content for Search Engines like Baidu */}
+      {/* <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+      <script>
+        var vConsole = new VConsole();
+      </script>  */}
       <div className="sr-only">
         <h1>RootDesk - 专业远程控制与桌面管理平台</h1>
         <p>

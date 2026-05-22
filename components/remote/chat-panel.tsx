@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input"
 import { useWebSocket } from "@/components/websocket-provider"
 import { DeviceInfo } from "./device-list"
 
+import { cn } from "@/lib/utils"
+
 interface ChatMessage {
   id: string
   sender: "server" | "client"
@@ -21,9 +23,10 @@ interface ChatPanelProps {
   onUnreadChange: (count: number) => void
   isOpen: boolean
   rtcMessage?: any
+  isLandscape?: boolean
 }
 
-export function ChatPanel({ device, onClose, onUnreadChange, isOpen, rtcMessage }: ChatPanelProps) {
+export function ChatPanel({ device, onClose, onUnreadChange, isOpen, rtcMessage, isLandscape }: ChatPanelProps) {
   const { sendCommand, lastMessage } = useWebSocket()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputValue, setInputValue] = useState("")
@@ -126,7 +129,14 @@ export function ChatPanel({ device, onClose, onUnreadChange, isOpen, rtcMessage 
   if (!isOpen) return null
 
   return (
-    <div className="absolute bottom-16 right-4 w-80 h-96 bg-card border border-border rounded-lg shadow-xl flex flex-col z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-200">
+    <div 
+      className={cn(
+        "absolute bg-card border border-border rounded-lg shadow-xl flex flex-col z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-200",
+        isLandscape 
+          ? "bottom-4 right-4 w-72 h-[calc(100vw-80px)] max-h-[400px]" 
+          : "bottom-16 right-4 w-80 h-96"
+      )}
+    >
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/50">
         <h3 className="font-medium text-sm">聊天 - {device.name}</h3>
         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>

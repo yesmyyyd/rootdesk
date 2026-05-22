@@ -90,6 +90,8 @@ const wsLastSeen = new WeakMap<WebSocket, number>();
 // Assistance code management
 const assistanceCodes = new Map<string, WebSocket>();
 const wsToAssistanceCode = new Map<WebSocket, string>();
+const wsToClientId = new Map<WebSocket, string>();
+const clientIdToWs = new Map<string, WebSocket>();
 
 function generateAssistanceCode(): string {
   let code = '';
@@ -316,14 +318,26 @@ app.prepare().then(() => {
       try {
         const data = JSON.parse(message.toString());
         
+        // Normalize deviceId if present to handle space inconsistencies
+         if (data.deviceId && typeof data.deviceId === 'string') {
+           data.deviceId = data.deviceId.replace(/\s+/g, '');
+         }
+         if (data.data && data.data.id && typeof data.data.id === 'string') {
+           data.data.id = data.data.id.replace(/\s+/g, '');
+         }
+        
         // Handle dynamic TURN configuration request
         if (data.type === 'get_turn_config') {
           const { deviceId, password } = data;
           const targetDevice = devices.get(deviceId);
           
           // Verify password
-          if (!targetDevice || (targetDevice.password && targetDevice.password !== password)) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Invalid device password for TURN config' }));
+          if (!targetDevice) {
+            ws.send(JSON.stringify({ type: 'error', message: '设备已离线，请重新连接' }));
+            return;
+          }
+          if (targetDevice.password && targetDevice.password !== password) {
+            ws.send(JSON.stringify({ type: 'error', message: '设备密码错误'+password }));
             return;
           }
 
@@ -359,6 +373,10 @@ app.prepare().then(() => {
         // Handle frontend client identification
         if (data.type === 'client_connect') {
           isClient = true;
+          const clientId = crypto.randomBytes(8).toString('hex');
+          wsToClientId.set(ws, clientId);
+          clientIdToWs.set(clientId, ws);
+          
           if (data.publicIp && data.publicIp !== 'unknown') {
             wsIps.set(ws, data.publicIp);
             monitor.registerConnection(data.publicIp, 'controller');
@@ -373,7 +391,7 @@ app.prepare().then(() => {
           const code = generateAssistanceCode();
           assistanceCodes.set(code, ws);
           wsToAssistanceCode.set(ws, code);
-          ws.send(JSON.stringify({ type: 'assistance_code', code }));
+          ws.send(JSON.stringify({ type: 'assistance_code', code, clientId }));
           
           return;
         }
@@ -436,9 +454,10 @@ app.prepare().then(() => {
               }
             }));
           } else {
+            const message = !device ? '设备已离线' : '设备密码错误';
             ws.send(JSON.stringify({
               type: 'device_auth_error',
-              message: '设备不存在或密码错误'
+              message: message
             }));
           }
           return;
@@ -540,6 +559,21 @@ app.prepare().then(() => {
             // Forward data to all clients
             if (['screen', 'screen_frame', 'window_frame', 'window_stream', 'output', 'files', 'drives', 'file_list', 'drive_list', 'error', 'windows', 'window_list', 'file_content', 'browser_cookies', 'browser_list', 'audio_data', 'hardware_info', 'performance_metrics', 'screen_metadata', 'window_metadata', 'chat_message', 'notification', 'file_progress', 'file_cancel', 'screenshot', 'clipboard', 'webrtc_answer', 'webrtc_ice_candidate'].includes(data.type)) {
               const { type, data: payload, path, password: _, ...rest } = data;
+              
+              // Special handling for WebRTC responses to route to specific client
+              if ((data.type === 'webrtc_answer' || data.type === 'webrtc_ice_candidate') && data.clientId) {
+                const targetWs = clientIdToWs.get(data.clientId);
+                if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+                  targetWs.send(JSON.stringify({
+                    type: data.type,
+                    deviceId: deviceId,
+                    data: payload,
+                    ...rest
+                  }));
+                  return;
+                }
+              }
+
               broadcastToClients({
                 type: data.type === 'screen' ? 'screen_frame' : 
                       data.type === 'window_frame' ? 'window_frame' :
@@ -605,11 +639,10 @@ app.prepare().then(() => {
           if (data.type === 'verify_device') {
             const targetDevice = devices.get(data.deviceId);
             if (!targetDevice) {
-              ws.send(JSON.stringify({ type: 'verify_result', success: false, message: '设备不存在或已离线', deviceId: data.deviceId }));
+              ws.send(JSON.stringify({ type: 'verify_result', success: false, message: '设备已离线', deviceId: data.deviceId }));
               return;
             }
             if (targetDevice.password && targetDevice.password !== data.password) {
-              console.log(`[-] Password mismatch for device ${data.deviceId}`);
               ws.send(JSON.stringify({ type: 'verify_result', success: false, message: '设备密码错误', deviceId: data.deviceId }));
               return;
             }
@@ -625,22 +658,17 @@ app.prepare().then(() => {
             return;
           }
 
-          if (data.type === 'webrtc_offer' || data.type === 'webrtc_ice_candidate') {
-            const targetDevice = devices.get(data.deviceId);
-            if (targetDevice && targetDevice.desktopWs && targetDevice.desktopWs.readyState === WebSocket.OPEN) {
-                targetDevice.desktopWs.send(JSON.stringify({
-                    command: data.type,
-                    args: data.args,
-                    deviceId: data.deviceId,
-                    password: targetDevice.password || ''
-                }));
-            }
-            return;
-          }
-
           if (data.type === 'command') {
             const targetDevice = devices.get(data.deviceId);
             
+            // Subscribe the client to this device for any command (screen, webrtc, etc.)
+            if (data.deviceId) {
+              const subs = clientSubscriptions.get(ws);
+              if (subs) {
+                  subs.add(data.deviceId);
+              }
+            }
+
             // Verify password if provided or if device has one
             if (targetDevice && targetDevice.password) {
               const verifiedSet = clientVerifiedDevices.get(ws);
@@ -681,6 +709,8 @@ app.prepare().then(() => {
                 if (targetWs && targetWs.readyState === WebSocket.OPEN) {
                   let command = data.command;
                   let args = data.args;
+                  const clientId = wsToClientId.get(ws);
+                  const clientIp = wsIps.get(ws) || 'unknown';
 
                   // Fix Windows CMD encoding by forcing UTF-8
                   if (command === 'exec' && typeof args === 'string' && targetDevice.info.os.toLowerCase().includes('win')) {
@@ -694,11 +724,29 @@ app.prepare().then(() => {
                     command: command,
                     args: args,
                     deviceId: data.deviceId,
+                    clientId: clientId,
+                    ip: clientIp,
                     password: data.password || targetDevice.password || ''
                   }));
-                  console.log(`[Server] Forwarded command to device ${data.deviceId}`);
+                  console.log(`[Server] Forwarded command to device ${data.deviceId}: ${command}`);
                   
-                  // Update viewer count if screen is started or stopped
+                  // Update viewer count for any command that might be starting a session
+                  if (['screen', 'window_stream', 'webrtc_offer'].includes(command)) {
+                      let viewerCount = 0;
+                      for (const [clientWs, subs] of clientSubscriptions.entries()) {
+                          if (clientWs.readyState === WebSocket.OPEN && subs.has(data.deviceId)) {
+                              viewerCount++;
+                          }
+                      }
+                      targetWs.send(JSON.stringify({
+                          command: 'viewer_count',
+                          args: { count: viewerCount },
+                          deviceId: data.deviceId,
+                          password: targetDevice.password || ''
+                      }));
+                  }
+                  
+                  // Legacy screen start/stop logic for viewer count
                   if (command === 'screen' && typeof args === 'object' && args !== null) {
                       const action = (args as any).action;
                       if (action === 'stop') {
@@ -759,47 +807,69 @@ app.prepare().then(() => {
         }
 
         const subs = clientSubscriptions.get(ws);
+        const clientId = wsToClientId.get(ws);
+        
         if (subs) {
             subs.forEach(subDeviceId => {
                 const targetDevice = devices.get(subDeviceId);
                 if (targetDevice && targetDevice.desktopWs && targetDevice.desktopWs.readyState === WebSocket.OPEN) {
+                    // Notify device to close WebRTC connection for this specific client
+                    if (clientId) {
+                        console.log(`[Server] Client ${clientId} disconnected. Notifying device ${subDeviceId} to close WebRTC.`);
+                        targetDevice.desktopWs.send(JSON.stringify({
+                            command: 'webrtc_close',
+                            clientId: clientId,
+                            deviceId: subDeviceId,
+                            password: targetDevice.password || ''
+                        }));
+                    }
+
                     // Count remaining clients subscribed to this device
+                    // IMPORTANT: We must check all clients, including those who might have just connected
                     let remainingClients = 0;
                     for (const [clientWs, otherSubs] of clientSubscriptions.entries()) {
-                        if (clientWs !== ws && otherSubs.has(subDeviceId)) {
+                        if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN && otherSubs.has(subDeviceId)) {
                             remainingClients++;
                         }
                     }
                     
+                    console.log(`[Server] Device ${subDeviceId} has ${remainingClients} remaining viewers.`);
+                    
                     if (remainingClients === 0) {
+                        console.log(`[Server] No viewers left for ${subDeviceId}. Sending screen stop command.`);
                         targetDevice.desktopWs.send(JSON.stringify({
                             command: 'screen',
                             args: { action: 'stop' },
                             deviceId: subDeviceId,
                             password: targetDevice.password || ''
                         }));
-                    }
-                    
-                    // Notify device of viewer count
-                    targetDevice.desktopWs.send(JSON.stringify({
-                        command: 'viewer_count',
-                        args: { count: remainingClients },
-                        deviceId: subDeviceId,
-                        password: targetDevice.password || ''
-                    }));
+                    } else {
+                        // Notify device of updated viewer count
+                        targetDevice.desktopWs.send(JSON.stringify({
+                            command: 'viewer_count',
+                            args: { count: remainingClients },
+                            deviceId: subDeviceId,
+                            password: targetDevice.password || ''
+                        }));
 
-                    // Notify other clients connected to this device
-                    for (const [clientWs, otherSubs] of clientSubscriptions.entries()) {
-                        if (otherSubs.has(subDeviceId)) {
-                            clientWs.send(JSON.stringify({
-                                type: 'viewer_count',
-                                deviceId: subDeviceId,
-                                count: remainingClients
-                            }));
+                        // Notify other clients connected to this device
+                        for (const [clientWs, otherSubs] of clientSubscriptions.entries()) {
+                            if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN && otherSubs.has(subDeviceId)) {
+                                clientWs.send(JSON.stringify({
+                                    type: 'viewer_count',
+                                    deviceId: subDeviceId,
+                                    count: remainingClients
+                                }));
+                            }
                         }
                     }
                 }
             });
+        }
+
+        if (clientId) {
+          clientIdToWs.delete(clientId);
+          wsToClientId.delete(ws);
         }
         clients.delete(ws);
         clientSubscriptions.delete(ws);

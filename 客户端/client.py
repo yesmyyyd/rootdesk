@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# RootDesk 客户端脚本 
+# RootDesk 客户端脚本
 # 
 # 运行前需确保安装以下依赖库：
 # pip install aiortc websocket-client psutil pyautogui mss Pillow dxcam numpy pyaudio pystray pywebview certifi
@@ -23,12 +23,42 @@ import random
 import string
 import ssl
 import asyncio
-# 系统授权与配置文件目录
-SYSTEM_AUTH_DIR = r"C:\ProgramData\SystemAuth" if platform.system() == "Windows" else os.path.join(tempfile.gettempdir(), "SystemAuth")
-print(f"[*] SYSTEM_AUTH_DIR: {SYSTEM_AUTH_DIR}")
-print(f"[*] Python Executable: {sys.executable}")
-print(f"[*] Python Version: {sys.version}")
-print(f"[*] Architecture: {platform.architecture()[0]}")
+import queue
+
+
+
+# --- 基础配置 ---
+HOST = "rootdesk.cn"
+PORT = 443
+PROTOCOL = "wss"
+REMARK = "RootDesk"
+RECONNECT_INTERVAL = 5
+AUTO_START = "none"
+ENABLED_MODULES = ['screen', 'terminal', 'files', 'windows', 'monitor', 'audio']
+PLATFORM_MODE = "pc"
+APP_URL = "https://rootdesk.cn"
+ENCRYPTION_KEY = "dGVzdF9rZXlfMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
+SINGLE_INSTANCE = "True"
+INSTALL_AS_SERVICE = False
+
+# --- 当前版本 ---
+CLIENT_VERSION = 5
+CLIENT_VERSION_NAME = "1.0.5"
+
+
+# --- 屏幕传输性能与阈值配置 ---
+STREAM_DIFF_THRESHOLD = 1       # 差异检测阈值 (0-255)。值越大，越忽略微小的颜色波动（噪点），带宽占用越低。建议值：10-30
+STREAM_FULL_REFRESH_INT = 10.0  # 全量刷新间隔（秒）。每隔多久强制发送一次完整画面，防止画面漂移。
+STREAM_PADDING = 16             # 局部更新扩展边距（像素）。在变化区域周围多裁剪一点，防止抗锯齿导致的黑边。
+STREAM_MAX_FPS = 60             # 最大传输帧率
+STREAM_MULTI_BLOCK_THRESHOLD = 15 # 多区域更新阈值。当超过多少个 8x8 区块发生变化时，触发连续全屏刷新。
+STREAM_FORCE_FULL_DURATION = 1.0 # 触发后的连续全屏刷新时长（秒）。
+FORCE_FULL_FRAME = True        # 强制发送全量帧（用于新连接初始化）
+FORCE_FULL_FRAME_UNTIL = 0     # 强制发送全量帧的截止时间戳（用于连接初始化时的连续发送）
+# ----------------------------
+
+
+
 try:
     import tkinter as tk
     from tkinter import ttk
@@ -36,12 +66,21 @@ try:
 except ImportError:
     HAS_TKINTER = False
 
+# 系统授权与配置文件目录
+SYSTEM_AUTH_DIR = r"C:\ProgramData\SystemAuth" if platform.system() == "Windows" else os.path.join(tempfile.gettempdir(), "SystemAuth")
+print(f"[*] SYSTEM_AUTH_DIR: {SYSTEM_AUTH_DIR}")
+print(f"[*] Python Executable: {sys.executable}")
+print(f"[*] Python Version: {sys.version}")
+print(f"[*] Architecture: {platform.architecture()[0]}")
 try:
     from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, RTCIceCandidate, RTCConfiguration, RTCIceServer
     from aiortc.contrib.media import MediaStreamTrack
     HAS_AIORTC = True
 except ImportError as e:
     print(f"[*] aiortc import error: {e}")
+    HAS_AIORTC = False
+except Exception as e:
+    print(f"[*] aiortc critical error during import: {e}")
     HAS_AIORTC = False
 try:
     import certifi
@@ -212,9 +251,7 @@ try:
 except ImportError:
     HAS_PYAUDIO = False
 
-# Client Version
-CLIENT_VERSION = 4
-CLIENT_VERSION_NAME = "1.0.4"
+
 
 class FallbackCamera:
     def __init__(self):
@@ -261,19 +298,7 @@ class FallbackCamera:
             except: pass
             self.sct = None
 
-# Configuration
-HOST = "rootdesk.cn"
-PORT = 443
-PROTOCOL = "wss"
-REMARK = "RootDesk"
-RECONNECT_INTERVAL = 5
-AUTO_START = "none"
-ENABLED_MODULES = ['screen', 'terminal', 'files', 'windows', 'monitor', 'audio']
-PLATFORM_MODE = "pc"
-APP_URL = "https://rootdesk.cn"
-ENCRYPTION_KEY = "dGVzdF9rZXlfMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
-SINGLE_INSTANCE = "True"
-INSTALL_AS_SERVICE = False
+
 CURRENT_DIR = os.getcwd()
 TRAY_ICON = None
 
@@ -532,6 +557,7 @@ print(f"[*] Device ID: {DEVICE_ID}")
 
 # Global state for streaming
 SERVER_CONNECTED = False
+IS_LOCAL_CONN = False
 CLIENT_ROLE = "service"
 STREAM_RUNNING = False
 REINIT_CAMERA = False
@@ -609,13 +635,49 @@ STREAM_CONFIG = {
     "mode": "screen", # screen, window
     "target_id": None,
     "quality": 50, 
-    "scale": 0.5
+    "scale": 0.5,
+    "fps": 30
 }
 STREAM_LOCK = threading.Lock()
 WS_CLIENT = None
 WS_LOCK = threading.Lock()
 VIEWER_COUNT = 0
+ACTIVE_CONTROLLERS = {} # {client_id: {"ip": "未知", "start_time": "..."}}
+CONNECTION_HISTORY_FILE = os.path.join(SYSTEM_AUTH_DIR, "connection_history.json")
 ROOT_WINDOW = None
+
+def log_connection_history(entry):
+    try:
+        # Calculate duration if timestamps are present
+        if "start_ts" in entry and "end_ts" in entry:
+            duration_sec = int(entry["end_ts"] - entry["start_ts"])
+            hours = duration_sec // 3600
+            minutes = (duration_sec % 3600) // 60
+            seconds = duration_sec % 60
+            
+            if hours > 0:
+                entry["duration"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                entry["duration"] = f"{minutes:02d}:{seconds:02d}"
+            
+            # Remove timestamps from saved JSON to keep it clean
+            del entry["start_ts"]
+            del entry["end_ts"]
+        
+        history = []
+        if os.path.exists(CONNECTION_HISTORY_FILE):
+            with open(CONNECTION_HISTORY_FILE, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        
+        history.insert(0, entry)
+        # Limit to 100 entries
+        history = history[:100]
+        
+        os.makedirs(os.path.dirname(CONNECTION_HISTORY_FILE), exist_ok=True)
+        with open(CONNECTION_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[-] Failed to log connection history: {e}")
 
 def get_exe_icon():
     """从 EXE 获取图标"""
@@ -746,16 +808,24 @@ def on_webview_closing():
     return True
 
 # WebRTC Globals
-RTC_PC = None
-RTC_DC = None
+RTC_PCS = {} # clientId -> RTCPeerConnection
+RTC_DCS = {} # clientId -> RTCDataChannel
 RTC_LOOP = None
 RTC_CONFIG_FUTURE = None
-RTC_CANDIDATE_QUEUE = []
+RTC_CANDIDATE_QUEUES = {} # clientId -> [candidates]
+RTC_LOOP_LAST_ALIVE = time.time()
 
 async def get_turn_config():
     global RTC_CONFIG_FUTURE
-    loop = asyncio.get_event_loop()
+    # 确保使用正确的 loop
+    try:
+        loop = asyncio.get_event_loop()
+    except:
+        if RTC_LOOP: loop = RTC_LOOP
+        else: return None
+        
     RTC_CONFIG_FUTURE = loop.create_future()
+    # ... (rest of get_turn_config)
     print("[*] 正在从服务器请求 TURN 配置...")
     safe_send(WS_CLIENT, json.dumps({
         "type": "get_turn_config",
@@ -788,57 +858,217 @@ async def get_turn_config():
         RTC_CONFIG_FUTURE = None
 
 def start_rtc_loop():
-    global RTC_LOOP
-    RTC_LOOP = asyncio.new_event_loop()
-    asyncio.set_event_loop(RTC_LOOP)
-    RTC_LOOP.run_forever()
+    global RTC_LOOP, RTC_LOOP_LAST_ALIVE
+    while True:
+        try:
+            print(f"[*] Starting WebRTC event loop (Thread: {threading.current_thread().name})...")
+            RTC_LOOP = asyncio.new_event_loop()
+            asyncio.set_event_loop(RTC_LOOP)
+            RTC_LOOP_LAST_ALIVE = time.time()
+            
+            # 内部心跳任务，更新活跃时间
+            async def loop_heartbeat():
+                global RTC_LOOP_LAST_ALIVE
+                while True:
+                    RTC_LOOP_LAST_ALIVE = time.time()
+                    await asyncio.sleep(5)
+            
+            RTC_LOOP.create_task(loop_heartbeat())
+            RTC_LOOP.run_forever()
+        except Exception as e:
+            print(f"[-] RTC_LOOP crashed: {e}, restarting in 1s...")
+            time.sleep(1)
+        finally:
+            if RTC_LOOP:
+                try:
+                    RTC_LOOP.close()
+                except: pass
+            RTC_LOOP = None
+
+def rtc_loop_watchdog():
+    """监控 RTC_LOOP 是否假死，如果假死则强制重启"""
+    global RTC_LOOP, RTC_LOOP_LAST_ALIVE
+    while True:
+        time.sleep(15)
+        if HAS_AIORTC:
+            # 如果超过 30 秒没有更新活跃时间，且 loop 应该是运行状态
+            if time.time() - RTC_LOOP_LAST_ALIVE > 30:
+                print("[!] 检测到 RTC_LOOP 假死（无响应超过30秒），执行强制重启...")
+                if RTC_LOOP:
+                    try:
+                        RTC_LOOP.stop() # 尝试停止
+                    except: pass
+                # 开启新线程启动 Loop，原线程可能卡在某个系统调用里，只能遗弃
+                new_thread_name = f"WebRTC-Loop-{int(time.time())}"
+                threading.Thread(target=start_rtc_loop, name=new_thread_name, daemon=True).start()
+                # 重置时间，防止连续重启
+                RTC_LOOP_LAST_ALIVE = time.time()
 
 if HAS_AIORTC:
-    threading.Thread(target=start_rtc_loop, daemon=True).start()
+    print("[*] 正在启动 WebRTC 核心线程...")
+    threading.Thread(target=start_rtc_loop, name="WebRTC-Loop", daemon=True).start()
+    threading.Thread(target=rtc_loop_watchdog, name="WebRTC-Watchdog", daemon=True).start()
+else:
+    print("[!] 警告: HAS_AIORTC 为 False，WebRTC 功能将不可用。请检查 aiortc 库是否安装。")
 
 def safe_send(ws, data, opcode=None):
-    # Try WebRTC DataChannel first for large binary data or screen frames
-    if RTC_DC and RTC_DC.readyState == "open":
-        try:
-            if RTC_LOOP:
-                RTC_LOOP.call_soon_threadsafe(RTC_DC.send, data)
+    # Try WebRTC DataChannels first for large binary data or screen frames
+    rtc_success = False
+    if RTC_DCS:
+        # Create a list of keys to avoid "dictionary changed size during iteration"
+        client_ids = list(RTC_DCS.keys())
+        for cid in client_ids:
+            dc = RTC_DCS.get(cid)
+            if dc:
+                if dc.readyState == "open":
+                    # Check buffer before sending to avoid massive latency
+                    # For non-frame data (control, chat), we always send
+                    is_frame = False
+                    if isinstance(data, (bytes, bytearray)) and len(data) > 0:
+                        is_frame = data[0] in [0x04, 0x05]
+                    
+                    if is_frame and dc.bufferedAmount > 4 * 1024 * 1024:
+                        continue # Skip this client for this frame if buffer is full
+
+                    try:
+                        if RTC_LOOP and RTC_LOOP.is_running():
+                            # We use call_soon_threadsafe to send data via the RTC loop thread
+                            RTC_LOOP.call_soon_threadsafe(dc.send, data)
+                            rtc_success = True
+                    except Exception as e:
+                        print(f"[-] WebRTC send error for client {cid}: {e}")
+                elif dc.readyState in ["closed", "closing"]:
+                    # Clean up if we find a closed channel during send
+                    if cid in RTC_DCS: del RTC_DCS[cid]
+                    if cid in RTC_PCS:
+                        # Attempt to close the PC as well
+                        if RTC_LOOP and RTC_LOOP.is_running():
+                            asyncio.run_coroutine_threadsafe(RTC_PCS[cid].close(), RTC_LOOP)
+                        del RTC_PCS[cid]
+    
+    # IMPORTANT: If data was sent via RTC to ALL active viewers, skip WebSocket for large data.
+    # This prevents duplicate bandwidth, "double sound" in audio, and "frame rollback".
+    all_on_rtc = (VIEWER_COUNT > 0 and len(RTC_DCS) >= VIEWER_COUNT)
+    if all_on_rtc and rtc_success:
+        if isinstance(data, (bytes, bytearray)) and len(data) > 0:
+            header = data[0]
+            # 0x02: raw audio, 0x03: opus audio, 0x04: frame, 0x05: compressed frame
+            if header in [0x02, 0x03, 0x04, 0x05]:
                 return True
-        except Exception as e:
-            print(f"[-] WebRTC send error: {e}")
-            # Fallback to WS
-            
+
     if not ws or not ws.sock or not ws.sock.connected:
         return False
+        
     try:
-        with WS_LOCK:
+        # 优化：如果是从 RTC 线程调用的，使用非阻塞锁防止死锁
+        is_rtc_thread = (threading.current_thread().name == "WebRTC-Loop")
+        if is_rtc_thread:
+            # RTC 线程只等 0.5 秒，拿不到锁就说明 WebSocket 太忙，改用后台线程发送
+            acquired = WS_LOCK.acquire(timeout=0.5)
+            if not acquired:
+                print("[!] RTC 线程获取 WS_LOCK 超时，改用临时线程发送信令以防死锁")
+                def bg_send():
+                    with WS_LOCK:
+                        try:
+                            if opcode: ws.send(data, opcode=opcode)
+                            else: ws.send(data)
+                        except: pass
+                threading.Thread(target=bg_send, daemon=True).start()
+                return True
+        else:
+            # 普通线程（如画面传输）依然正常排队
+            WS_LOCK.acquire()
+            
+        try:
             if opcode:
                 ws.send(data, opcode=opcode)
             else:
                 ws.send(data)
-        return True
+            return True
+        finally:
+            if not is_rtc_thread or (is_rtc_thread and 'acquired' in locals() and acquired):
+                WS_LOCK.release()
     except Exception as e:
         print(f"[-] Safe send error: {e}")
         return False
 
-async def setup_webrtc(offer_sdp):
-    global RTC_PC, RTC_DC, RTC_CANDIDATE_QUEUE
-    print(f"[*] WebRTC 初始化开始 (SDP 长度: {len(offer_sdp)})")
-    if RTC_PC:
-        print("[*] 正在关闭现有的 PeerConnection...")
-        await RTC_PC.close()
+async def add_ice_candidate(candidate_dict, client_id=None):
+    global RTC_PCS, RTC_CANDIDATE_QUEUES
     
-    # Clear old candidate queue for new connection
-    RTC_CANDIDATE_QUEUE = []
+    if client_id is None:
+        # Fallback for legacy calls if any
+        if not RTC_PCS: return
+        client_id = list(RTC_PCS.keys())[0]
+
+    pc = RTC_PCS.get(client_id)
+    if pc:
+        try:
+            from aiortc.sdp import candidate_from_sdp
+            candidate_str = candidate_dict.get("candidate")
+            if candidate_str:
+                print(f"[*] 正在为客户端 {client_id} 添加 ICE Candidate: {candidate_str[:30]}...")
+                if candidate_str.startswith("candidate:"):
+                    candidate_str = candidate_str[10:]
+                
+                c = candidate_from_sdp(candidate_str)
+                
+                candidate = RTCIceCandidate(
+                    component=c.component,
+                    foundation=c.foundation,
+                    ip=c.ip,
+                    port=c.port,
+                    priority=c.priority,
+                    protocol=c.protocol,
+                    type=c.type,
+                    sdpMid=candidate_dict.get("sdpMid"),
+                    sdpMLineIndex=candidate_dict.get("sdpMLineIndex")
+                )
+                
+                if pc.remoteDescription:
+                    await pc.addIceCandidate(candidate)
+                    print(f"[+] 客户端 {client_id} 的 ICE Candidate 添加成功")
+                else:
+                    # Queue candidates if remote description is not yet set
+                    if client_id not in RTC_CANDIDATE_QUEUES:
+                        RTC_CANDIDATE_QUEUES[client_id] = []
+                    RTC_CANDIDATE_QUEUES[client_id].append(candidate_dict)
+        except Exception as e:
+            print(f"[-] 添加 ICE Candidate 出错 ({client_id}): {e}")
+    else:
+        # Queue candidates if PC is not yet initialized
+        if client_id not in RTC_CANDIDATE_QUEUES:
+            RTC_CANDIDATE_QUEUES[client_id] = []
+        RTC_CANDIDATE_QUEUES[client_id].append(candidate_dict)
+
+async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
+    global RTC_PCS, RTC_DCS, RTC_CANDIDATE_QUEUES, FORCE_FULL_FRAME, FORCE_FULL_FRAME_UNTIL, ACTIVE_CONTROLLERS
+    print(f"[*] WebRTC 初始化开始 (Client: {client_id}, IP: {client_ip}, SDP 长度: {len(offer_sdp)})")
+    
+    # 记录当前连接
+    ACTIVE_CONTROLLERS[client_id] = {
+        "ip": client_ip,
+        "start_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "start_timestamp": time.time()
+    }
+    
+    # 强制清理该客户端的旧连接
+    if client_id in RTC_PCS:
+        print(f"[*] 正在关闭客户端 {client_id} 的现有 PeerConnection...")
+        try:
+            await asyncio.wait_for(RTC_PCS[client_id].close(), timeout=3.0)
+        except: pass
+        del RTC_PCS[client_id]
+        if client_id in RTC_DCS: del RTC_DCS[client_id]
     
     # Fetch dynamic TURN config
-    print("[*] 正在获取动态 TURN 配置...")
+    print(f"[*] 正在为客户端 {client_id} 获取动态 TURN 配置...")
     dynamic_ice_servers = await get_turn_config()
     
     # Create ICE servers
     ice_servers = []
     
     if dynamic_ice_servers:
-        print("[*] 使用动态 TURN 服务器配置")
+        print(f"[*] 客户端 {client_id} 使用动态 TURN 服务器配置")
         for server in dynamic_ice_servers:
             try:
                 s = RTCIceServer(
@@ -880,29 +1110,25 @@ async def setup_webrtc(offer_sdp):
                     self.iceServers = d.get('iceServers', [])
         rtc_config = ConfigWrapper(rtc_config)
     
-    print(f"[*] 正在初始化 RTCPeerConnection (配置了 {len(ice_servers)} 个服务器)")
+    print(f"[*] 正在初始化 RTCPeerConnection (Client: {client_id})")
     try:
-        RTC_PC = RTCPeerConnection(rtc_config)
+        pc = RTCPeerConnection(rtc_config)
+        RTC_PCS[client_id] = pc
     except Exception as e:
         print(f"[-] RTCPeerConnection 初始化失败: {e}")
         return
 
-    # Process any candidates that arrived while we were fetching TURN config
-    if RTC_CANDIDATE_QUEUE:
-        print(f"[*] 正在处理队列中等待的 {len(RTC_CANDIDATE_QUEUE)} 个 ICE Candidate")
-        for cand in RTC_CANDIDATE_QUEUE:
-            await add_ice_candidate(cand)
-        RTC_CANDIDATE_QUEUE = []
-
-    @RTC_PC.on("icegatheringstatechange")
+    @pc.on("icegatheringstatechange")
     def on_icegatheringstatechange():
-        print(f"[*] WebRTC ICE 收集状态: {RTC_PC.iceGatheringState}")
+        print(f"[*] WebRTC ICE 收集状态 ({client_id}): {pc.iceGatheringState}")
 
-    @RTC_PC.on("datachannel")
+    @pc.on("datachannel")
     def on_datachannel(channel):
-        global RTC_DC
-        RTC_DC = channel
-        print("[*] WebRTC 数据通道 (DataChannel) 已建立")
+        global FORCE_FULL_FRAME, FORCE_FULL_FRAME_UNTIL
+        RTC_DCS[client_id] = channel
+        FORCE_FULL_FRAME = True
+        FORCE_FULL_FRAME_UNTIL = time.time() + 10
+        print(f"[*] WebRTC 数据通道 ({client_id}) 已建立，强制发送 10 秒全屏图")
         
         @channel.on("message")
         def on_message(message):
@@ -911,22 +1137,33 @@ async def setup_webrtc(offer_sdp):
                     if WS_CLIENT and hasattr(WS_CLIENT, 'on_message') and WS_CLIENT.on_message:
                         WS_CLIENT.on_message(WS_CLIENT, message)
             except Exception as e:
-                print(f"[-] 数据通道消息处理出错: {e}")
+                print(f"[-] 数据通道消息处理出错 ({client_id}): {e}")
 
-    @RTC_PC.on("iceconnectionstatechange")
+    @pc.on("iceconnectionstatechange")
     async def on_iceconnectionstatechange():
-        print(f"[*] WebRTC ICE 连接状态: {RTC_PC.iceConnectionState}")
-        if RTC_PC.iceConnectionState in ["failed", "closed"]:
-            global RTC_DC
-            RTC_DC = None
+        print(f"[*] WebRTC ICE 连接状态 ({client_id}): {pc.iceConnectionState}")
+        if pc.iceConnectionState in ["failed", "closed"]:
+            if client_id in ACTIVE_CONTROLLERS:
+                info = ACTIVE_CONTROLLERS.pop(client_id)
+                log_connection_history({
+                    "id": client_id,
+                    "ip": info["ip"],
+                    "start": info["start_time"],
+                    "end": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "start_ts": info.get("start_timestamp", time.time()),
+                    "end_ts": time.time()
+                })
+            if client_id in RTC_DCS: del RTC_DCS[client_id]
+            if client_id in RTC_PCS: del RTC_PCS[client_id]
 
-    @RTC_PC.on("icecandidate")
+    @pc.on("icecandidate")
     def on_icecandidate(candidate):
         if candidate:
-            print(f"[*] 客户端生成了 ICE Candidate: {candidate.candidate[:30]}...")
+            print(f"[*] 客户端生成了 ICE Candidate ({client_id}): {candidate.candidate[:30]}...")
             safe_send(WS_CLIENT, json.dumps({
                 "type": "webrtc_ice_candidate",
                 "deviceId": DEVICE_ID.replace(" ", ""),
+                "clientId": client_id,
                 "candidate": {
                     "candidate": candidate.candidate,
                     "sdpMid": candidate.sdpMid,
@@ -934,74 +1171,42 @@ async def setup_webrtc(offer_sdp):
                 }
             }))
         else:
-            print("[*] 客户端 ICE Candidate 收集完成") 
+            print(f"[*] 客户端 ICE Candidate 收集完成 ({client_id})") 
 
     try:
         offer = RTCSessionDescription(sdp=offer_sdp, type="offer")
-        print("[*] 正在设置远程描述 (Offer)...")
-        await RTC_PC.setRemoteDescription(offer)
+        print(f"[*] 正在设置远程描述 (Offer, Client: {client_id})...")
+        await pc.setRemoteDescription(offer)
         
-        print("[*] 正在创建应答 (Answer)...")
-        answer = await RTC_PC.createAnswer()
+        # Process queued candidates
+        if client_id in RTC_CANDIDATE_QUEUES:
+            print(f"[*] 正在处理队列中等待的 {len(RTC_CANDIDATE_QUEUES[client_id])} 个 ICE Candidate (Client: {client_id})")
+            for cand in RTC_CANDIDATE_QUEUES[client_id]:
+                await add_ice_candidate(cand, client_id)
+            del RTC_CANDIDATE_QUEUES[client_id]
+
+        print(f"[*] 正在创建应答 (Answer, Client: {client_id})...")
+        answer = await pc.createAnswer()
         
-        print(f"[*] 正在设置本地描述 (Answer)...")
-        await RTC_PC.setLocalDescription(answer)
-        print("[+] WebRTC Answer 已准备就绪并发送。")
+        print(f"[*] 正在设置本地描述 (Answer, Client: {client_id})...")
+        await pc.setLocalDescription(answer)
         
-        # Send answer to server via WS
         safe_send(WS_CLIENT, json.dumps({
             "type": "webrtc_answer",
             "deviceId": DEVICE_ID.replace(" ", ""),
-            "sdp": RTC_PC.localDescription.sdp
+            "clientId": client_id,
+            "sdp": pc.localDescription.sdp
         }))
+        print(f"[+] WebRTC Answer 已发送 (Client: {client_id})")
     except Exception as e:
-        print(f"[-] WebRTC 设置过程出错: {e}")
-        import traceback
-        traceback.print_exc()
-
-async def add_ice_candidate(candidate_dict):
-    global RTC_PC, RTC_CANDIDATE_QUEUE
-    if not RTC_PC:
-        if RTC_CANDIDATE_QUEUE is not None:
-             print("[*] 正在将 ICE Candidate 加入待处理队列...")
-             RTC_CANDIDATE_QUEUE.append(candidate_dict)
-        return
-        
-    try:
-        from aiortc.sdp import candidate_from_sdp
-        candidate_str = candidate_dict.get("candidate")
-        if candidate_str:
-            print(f"[*] 正在添加 ICE Candidate: {candidate_str[:30]}...")
-            if candidate_str.startswith("candidate:"):
-                candidate_str = candidate_str[10:]
-            
-            c = candidate_from_sdp(candidate_str)
-            
-            candidate = RTCIceCandidate(
-                component=c.component,
-                foundation=c.foundation,
-                ip=c.ip,
-                port=c.port,
-                priority=c.priority,
-                protocol=c.protocol,
-                type=c.type,
-                sdpMid=candidate_dict.get("sdpMid"),
-                sdpMLineIndex=candidate_dict.get("sdpMLineIndex")
-            )
-            
-            await RTC_PC.addIceCandidate(candidate)
-            print("[+] ICE Candidate 添加成功")
-    except Exception as e:
-        print(f"[-] 添加 ICE Candidate 出错: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[-] setup_webrtc 异常 ({client_id}): {e}")
 
 def sync_auth_info(ws):
     if not ws or not SERVER_CONNECTED: return
     print("[*] Syncing auth info with server...")
     safe_send(ws, json.dumps({
         "type": "update_password",
-        "deviceId": DEVICE_ID,
+        "deviceId": DEVICE_ID.replace(" ", ""),
         "data": {
             "password": DEVICE_PASSWORD
         }
@@ -1060,6 +1265,26 @@ if platform.system() == "Windows":
     KEYEVENTF_UNICODE = 0x0004
     KEYEVENTF_KEYUP = 0x0002
     KEYEVENTF_SCANCODE = 0x0008
+    KEYEVENTF_EXTENDEDKEY = 0x0001
+
+    # Global tracking for auto-repeat
+    HELD_KEYS = {} # vk -> stop_event
+    HELD_KEYS_LOCK = threading.Lock()
+
+    def _key_repeater_task(vk, use_interception, stop_event):
+        """Internal task to repeat key down events locally."""
+        # Initial delay before auto-repeat (standard Windows is ~500ms)
+        if stop_event.wait(0.5): return
+        
+        scan = ctypes.windll.user32.MapVirtualKeyW(vk, 0)
+        while not stop_event.is_set():
+            if use_interception and HAS_INTERCEPTION:
+                ic_key_down(scan)
+            else:
+                send_key_input(vk, is_up=False)
+            
+            if stop_event.wait(0.03): # 30ms repeat rate
+                break
 
     VK_MAP = {
         "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "shift": 0x10, "ctrl": 0x11,
@@ -1103,18 +1328,49 @@ if platform.system() == "Windows":
         except:
             return 0, "error"
 
-    def send_key_input(vk, is_up=False):
+    def send_key_input(vk, is_up=False, duration=0):
+        if not vk: return
+        
         user32 = ctypes.windll.user32
-        inp = INPUT()
-        inp.type = INPUT_KEYBOARD
-        inp.u.ki.wVk = vk
-        inp.u.ki.wScan = user32.MapVirtualKeyW(vk, 0)
-        inp.u.ki.dwFlags = KEYEVENTF_KEYUP if is_up else 0
-        if inp.u.ki.wScan:
-            inp.u.ki.dwFlags |= KEYEVENTF_SCANCODE
-        inp.u.ki.time = 0
-        inp.u.ki.dwExtraInfo = None
-        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+        scan = user32.MapVirtualKeyW(vk, 0)
+        
+        def _send(up):
+            flags = 0
+            if up:
+                flags |= KEYEVENTF_KEYUP
+            
+            # Extended keys (arrows, home, end, etc.)
+            if vk in [0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x5B, 0x5C, 0x12, 0x11]:
+                flags |= KEYEVENTF_EXTENDEDKEY
+
+            # For some games, scan code is required. 
+            # We'll use SendInput which is the modern way to send input.
+            inp = INPUT()
+            inp.type = INPUT_KEYBOARD
+            inp.u.ki.wVk = 0 if scan else vk
+            inp.u.ki.wScan = scan
+            inp.u.ki.dwFlags = flags
+            if scan:
+                inp.u.ki.dwFlags |= KEYEVENTF_SCANCODE
+            inp.u.ki.time = 0
+            inp.u.ki.dwExtraInfo = ctypes.cast(0, ctypes.POINTER(ctypes.c_ulong))
+            
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+        if duration > 0:
+            # Scheme 2: Continuously send key down signals -> then up
+            # Simulates the effect of a physical keyboard long press
+            _send(False) # Initial down
+            time.sleep(0.5) # Initial delay before auto-repeat (typical Windows delay)
+            
+            end_time = time.time() + duration
+            while time.time() < end_time:
+                _send(False)
+                time.sleep(0.03) # 30ms repeat rate
+                
+            _send(True) # Final up
+        else:
+            _send(is_up)
     
     def send_key_press(vk):
         send_key_input(vk, False)
@@ -1141,8 +1397,6 @@ if platform.system() == "Windows":
         except:
             return False
 
-
-
     def is_system():
         try:
             startupinfo = subprocess.STARTUPINFO()
@@ -1156,7 +1410,7 @@ if platform.system() == "Windows":
                 encoding="gbk",
                 errors="ignore"
             )
-            return "nt authority\\system" in res.stdout.lower()
+            return "nt authority\system" in res.stdout.lower()
         except:
             return False
 
@@ -1757,6 +2011,23 @@ if platform.system() == "Windows":
         if MOUSE_DEVICE != -1:
             ic.interception_send(ic_context, MOUSE_DEVICE, ctypes.byref(stroke), 1)
 
+    def ic_mouse_move_relative(dx, dy):
+        global MOUSE_DEVICE
+        if not HAS_INTERCEPTION: return
+        stroke = MouseStroke()
+        stroke.x = dx
+        stroke.y = dy
+        stroke.flags = 0 # Relative move
+        
+        if MOUSE_DEVICE == -1:
+            for i in range(11, 21):
+                if ic.interception_is_mouse(i):
+                    MOUSE_DEVICE = i
+                    break
+        
+        if MOUSE_DEVICE != -1:
+            ic.interception_send(ic_context, MOUSE_DEVICE, ctypes.byref(stroke), 1)
+
     def ic_mouse_click(button, action="click"):
         global MOUSE_DEVICE
         if not HAS_INTERCEPTION: return
@@ -1918,6 +2189,10 @@ if platform.system() == "Windows":
 AUDIO_STREAM_RUNNING = False
 AUDIO_PLAYER = None
 AUDIO_PLAYER_STREAM = None
+AUDIO_PLAY_QUEUE = queue.Queue()
+AUDIO_PLAY_THREAD = None
+AUDIO_MANAGER = None
+AUDIO_MANAGER_LOCK = threading.Lock()
 AUDIO_CHUNK = 960 # Opus frame size for 60ms at 16000Hz (16000 * 0.06 = 960)
 
 # Input State
@@ -2157,7 +2432,7 @@ def capture_window(hwnd, quality, scale):
     return None, 0, 0
 
 def stream_worker():
-    global STREAM_RUNNING, WS_CLIENT, REINIT_CAMERA
+    global STREAM_RUNNING, WS_CLIENT, REINIT_CAMERA, FORCE_FULL_FRAME, FORCE_FULL_FRAME_UNTIL
     print("[*] Stream worker started")
     
     if platform.system() == "Windows":
@@ -2169,6 +2444,7 @@ def stream_worker():
     
     last_frame = None
     frame_count = 0
+    last_full_frame_time = 0
     
     camera = None
     
@@ -2232,10 +2508,39 @@ def stream_worker():
 
     LAST_DESKTOP = None
     LAST_SUCCESSFUL_GRAB = time.time()
-    IS_LOCAL_CONN = "127.0.0.1" in ["localhost", "127.0.0.1", "192.168.1.1", "0.0.0.0"]
+    
+    def check_is_local():
+        global IS_LOCAL_CONN
+        try:
+            if WS_CLIENT and WS_CLIENT.sock and WS_CLIENT.sock.connected:
+                address = WS_CLIENT.sock.getpeername()[0]
+                # 检查是否为回环地址或内网 IP 段
+                if address in ["127.0.0.1", "localhost", "::1"]:
+                    IS_LOCAL_CONN = True
+                    return True
+                
+                parts = address.split('.')
+                if len(parts) == 4:
+                    first = int(parts[0])
+                    second = int(parts[1])
+                    if (first == 192 and second == 168) or                        (first == 10) or                        (first == 172 and 16 <= second <= 31):
+                        IS_LOCAL_CONN = True
+                        return True
+            
+            # 如果是 WebRTC 且没有走 Relay (TURN)，通常也是 P2P 直连，内网环境性能极佳
+            # 这里简单判断：如果 RTC 已建立，且地址是内网，则视为本地连接
+            if RTC_DC and RTC_DC.readyState == "open":
+                # 暂无法直接从 aiortc 获取对端 IP，但如果是内网 RTC，通常 WS 也会是内网或 127.0.0.1
+                # 如果用户明确知道是内网 RTC，可以信任 RTC_DC 的带宽
+                pass
+        except:
+            pass
+        IS_LOCAL_CONN = False
+        return False
+
+    last_cursor_style = "default"
     DXCAM_FAIL_COUNT = 0
     MAX_DXCAM_FAILS = 3
-    last_cursor_style = "default"
     
     while True:
         if not STREAM_RUNNING or not WS_CLIENT or not WS_CLIENT.sock or not WS_CLIENT.sock.connected:
@@ -2323,6 +2628,7 @@ def stream_worker():
                 scale = STREAM_CONFIG.get("scale", 0.5)
                 compress = STREAM_CONFIG.get("compress", False)
                 use_webp = STREAM_CONFIG.get("webp", True)
+                fps = STREAM_CONFIG.get("fps", 30)
 
             is_locked = False
             if platform.system() == "Windows":
@@ -2426,8 +2732,8 @@ def stream_worker():
                     # If camera is active but returns None, it might be changing state
                     if camera:
                         # Check if we've been failing for more than 3 seconds
-                        if time.time() - LAST_SUCCESSFUL_GRAB > 3.0:
-                            print("[!] No frames captured for >3s, assuming screen is locked...")
+                        if time.time() - LAST_SUCCESSFUL_GRAB > 15.0:
+                            print("[!] No frames captured for >15s, assuming screen is locked...")
                             metadata = {
                                 "type": "screen_metadata",
                                 "is_locked": True,
@@ -2461,60 +2767,77 @@ def stream_worker():
                 is_full_frame = True
                 x, y = 0, 0
                 send_img = img
+                has_change = False
                 
-                if last_frame and frame_count % 60 != 0 and last_frame.size == img.size:
+                # Local connection doesn't mean we need full frames every time.
+                # Full frames are only needed on start, or every few seconds.
+                is_forcing = FORCE_FULL_FRAME or (time.time() < FORCE_FULL_FRAME_UNTIL) or (time.time() - last_full_frame_time > STREAM_FULL_REFRESH_INT)
+                
+                # 即使在强制全屏期间，我们也进行差异检测以判断是否需要延长全屏时长
+                if last_frame and last_frame.size == img.size:
                     w, h = img.size
-                    
-                    # 使用 ImageChops 进行精确的差异检测，确保即使是单像素的变化也能被捕捉到
-                    # 这解决了用户反馈的“轻微变化没有传输”的问题
                     diff = ImageChops.difference(img, last_frame)
-                    bbox = diff.getbbox()
+                    thresh = diff.convert('L').point(lambda p: 255 if p > STREAM_DIFF_THRESHOLD else 0)
+                    bbox = thresh.getbbox()
                     
-                    has_change = False
-                    if bbox:
-                        has_change = True
-                        min_x, min_y, max_x, max_y = bbox
+                    small_thresh = thresh.resize((16, 16), Image.Resampling.NEAREST)
+                    changed_blocks = 0
+                    for pixel in small_thresh.getdata():
+                        if pixel > 0:
+                            changed_blocks += 1
                     
-                    # 光标感知：如果在输入，强制更新光标周围区域，提高响应感
-                    is_typing = (cursor_style == "text" or time.time() - LAST_INPUT_TIME < 3.0)
-                    if not has_change and is_typing and cursor_pos:
-                        cx, cy = cursor_pos
-                        if scale != 1.0:
-                            cx, cy = int(cx * scale), int(cy * scale)
-                        min_x, min_y, max_x, max_y = cx-150, cy-75, cx+150, cy+75
-                        has_change = True
-                        bbox = (max(0, min_x), max(0, min_y), min(w, max_x), min(h, max_y))
+                    # 如果活跃度高，延长全屏刷新时间（累加机制）
+                    # 在本地连接下，我们稍微放宽这个阈值
+                    multi_block_limit = STREAM_MULTI_BLOCK_THRESHOLD * 2 if check_is_local() else STREAM_MULTI_BLOCK_THRESHOLD
+                    if changed_blocks >= multi_block_limit:
+                        FORCE_FULL_FRAME_UNTIL = time.time() + STREAM_FORCE_FULL_DURATION
+                        is_forcing = True
 
-                    if not has_change and not cursor_style_changed:
-                        # 未检测到变化且光标样式未变，稍微休眠并跳过
-                        time.sleep(0.01)
-                        frame_count += 1
-                        continue
-                    
-                    if not has_change and cursor_style_changed:
-                        # 仅光标样式变化，发送一个极小的全帧或当前帧的一部分以携带元数据
-                        # 这里我们选择发送一个 1x1 的透明像素或者只是当前的 full frame
-                        # 为了简单起见，我们发送全帧，但标记为 full=True
-                        has_change = True
-                        is_full_frame = True
-                        send_img = img
-                        x, y = 0, 0
-                    
-                    # 本地连接优化：跳过裁剪以节省 CPU
-                    # 远程连接优化：裁剪以节省带宽
-                    if IS_LOCAL_CONN:
+                    if is_forcing:
                         is_full_frame = True
                         send_img = img
                         x, y = 0, 0
                     else:
-                        # 规范化并裁剪变化区域，稍微向外扩展以包含抗锯齿像素
-                        padding = 8
-                        bbox = (max(0, min_x-padding), max(0, min_y-padding), 
-                                min(w, max_x+padding), min(h, max_y+padding))
-                        send_img = img.crop(bbox)
-                        x, y = bbox[0], bbox[1]
-                        is_full_frame = False
+                        # 增量模式：检查 RTC 缓冲区，防止拥塞
+                        if RTC_DCS:
+                            rtc_busy = False
+                            for dc in RTC_DCS.values():
+                                try:
+                                    # Increased buffer limit for RTC to 4MB to prevent aggressive frame skipping
+                                    if dc.readyState == "open" and dc.bufferedAmount > 4 * 1024 * 1024:
+                                        rtc_busy = True
+                                        break
+                                except: pass
+                            if rtc_busy:
+                                time.sleep(0.01)
+                                frame_count += 1
+                                continue
+
+                        if bbox:
+                            has_change = True
+                            min_x, min_y, max_x, max_y = bbox
+                        
+                        if not has_change and not cursor_style_changed:
+                            time.sleep(0.01)
+                            frame_count += 1
+                            continue
+                        
+                        if has_change:
+                            padding = STREAM_PADDING
+                            bbox_padded = (max(0, min_x-padding), max(0, min_y-padding), 
+                                          min(w, max_x+padding), min(h, max_y+padding))
+                            send_img = img.crop(bbox_padded)
+                            x, y = bbox_padded[0], bbox_padded[1]
+                            is_full_frame = False
+                        else:
+                            is_full_frame = True
+                            send_img = img
+                            x, y = 0, 0
                 
+                if is_full_frame:
+                    last_full_frame_time = time.time()
+                    FORCE_FULL_FRAME = False
+
                 last_frame = img
                 frame_count += 1
                 
@@ -2530,6 +2853,7 @@ def stream_worker():
                 # Send merged binary data with header 0x04 (standard) or 0x05 (compressed)
                 metadata = {
                     "type": "screen_metadata",
+                    "ts": time.time(),
                     "cursor_style": cursor_style,
                     "is_locked": is_locked,
                     "has_interception": HAS_INTERCEPTION,
@@ -2571,34 +2895,60 @@ def stream_worker():
                     x, y = 0, 0
                     send_img = img
                     
-                    if last_frame and frame_count % 60 != 0 and last_frame.size == img.size:
+                    is_forcing = FORCE_FULL_FRAME or (time.time() < FORCE_FULL_FRAME_UNTIL) or (time.time() - last_full_frame_time > STREAM_FULL_REFRESH_INT)
+                    
+                    if last_frame and last_frame.size == img.size:
+                        # 1. 差异检测与活跃度判定
                         w, h = img.size
-                        step = 16 if IS_LOCAL_CONN else 32
+                        step = 8 if IS_LOCAL_CONN else 16
                         p1 = img.load()
                         p2 = last_frame.load()
                         
                         min_x, min_y, max_x, max_y = w, h, 0, 0
                         has_change = False
+                        changed_blocks = 0
                         
                         for gy in range(0, h, step):
                             for gx in range(0, w, step):
                                 if p1[gx, gy] != p2[gx, gy]:
                                     has_change = True
+                                    changed_blocks += 1
                                     if gx < min_x: min_x = gx
                                     if gy < min_y: min_y = gy
                                     if gx > max_x: max_x = gx
                                     if gy > max_y: max_y = gy
                         
-                        if not has_change:
-                            time.sleep(0.01)
-                            frame_count += 1
-                            continue
-                        
-                        if IS_LOCAL_CONN:
+                        # 如果变化块较多，触发连续全屏刷新（支持累加）
+                        if changed_blocks >= STREAM_MULTI_BLOCK_THRESHOLD:
+                            FORCE_FULL_FRAME_UNTIL = time.time() + STREAM_FORCE_FULL_DURATION
+                            is_forcing = True
+
+                        # 2. 决定发送模式
+                        if is_forcing:
                             is_full_frame = True
                             send_img = img
                             x, y = 0, 0
                         else:
+                            # 增量模式：检查 RTC 缓冲区
+                            if RTC_DCS:
+                                rtc_busy = False
+                                for dc in RTC_DCS.values():
+                                    try:
+                                        if dc.readyState == "open" and dc.bufferedAmount > 4 * 1024 * 1024:
+                                            rtc_busy = True
+                                            break
+                                    except: pass
+                                if rtc_busy:
+                                    time.sleep(0.01)
+                                    frame_count += 1
+                                    continue
+
+                            if not has_change:
+                                time.sleep(0.01)
+                                frame_count += 1
+                                continue
+                            
+                            # 裁剪
                             bbox = (max(0, min_x-step), max(0, min_y-step), min(w, max_x+step), min(h, max_y+step))
                             send_img = img.crop(bbox)
                             x, y = bbox[0], bbox[1]
@@ -2612,6 +2962,7 @@ def stream_worker():
                     # Send merged binary data with header 0x05
                     metadata = {
                         "type": "window_metadata",
+                        "ts": time.time(),
                         "cursor_style": cursor_style,
                         "is_locked": is_locked,
                         "has_interception": HAS_INTERCEPTION,
@@ -2635,10 +2986,18 @@ def stream_worker():
                     time.sleep(1)
 
             # Limit FPS
-            if mode == "window":
-                time.sleep(0.1)
-            else:
-                time.sleep(0.03) # Slightly faster loop to catch changes
+            # Use a more accurate FPS limit logic: sleep = (1/fps) - execution_time
+            now = time.time()
+            if 'last_frame_time' not in locals():
+                last_frame_time = now
+            
+            elapsed = now - last_frame_time
+            target_interval = 1.0 / fps
+            
+            if elapsed < target_interval:
+                time.sleep(target_interval - elapsed)
+            
+            last_frame_time = time.time()
             
         except Exception as e:
             print(f"[-] Stream error: {e}")
@@ -2716,32 +3075,59 @@ def handle_input(ws, args):
             else:
                 pyautogui.doubleClick(x, y, button=button)
         elif action == "mousedown":
-            x, y = int(args.get("x", 0)), int(args.get("y", 0))
+            x_raw, y_raw = args.get("x"), args.get("y")
             button = args.get("button", "left")
             if platform.system() == "Windows":
-                if use_interception and HAS_INTERCEPTION:
-                    ic_mouse_move(x, y)
-                    ic_mouse_click(button, "mousedown")
+                if x_raw is not None and y_raw is not None:
+                    x, y = int(x_raw), int(y_raw)
+                    if use_interception and HAS_INTERCEPTION:
+                        ic_mouse_move(x, y)
+                        ic_mouse_click(button, "mousedown")
+                    else:
+                        ctypes.windll.user32.SetCursorPos(x, y)
+                        flags_down = 0x0002 if button == "left" else (0x0008 if button == "right" else 0x0020)
+                        ctypes.windll.user32.mouse_event(flags_down, 0, 0, 0, 0)
                 else:
-                    ctypes.windll.user32.SetCursorPos(x, y)
-                    flags_down = 0x0002 if button == "left" else (0x0008 if button == "right" else 0x0020)
-                    ctypes.windll.user32.mouse_event(flags_down, 0, 0, 0, 0)
-                    time.sleep(0.02)
+                    # Click at current position
+                    if use_interception and HAS_INTERCEPTION:
+                        ic_mouse_click(button, "mousedown")
+                    else:
+                        flags_down = 0x0002 if button == "left" else (0x0008 if button == "right" else 0x0020)
+                        ctypes.windll.user32.mouse_event(flags_down, 0, 0, 0, 0)
+                time.sleep(0.02)
             else:
-                pyautogui.mouseDown(x, y, button=button)
+                pyautogui.mouseDown(button=button)
         elif action == "mouseup":
-            x, y = int(args.get("x", 0)), int(args.get("y", 0))
+            x_raw, y_raw = args.get("x"), args.get("y")
             button = args.get("button", "left")
             if platform.system() == "Windows":
-                if use_interception and HAS_INTERCEPTION:
-                    ic_mouse_move(x, y)
-                    ic_mouse_click(button, "mouseup")
+                if x_raw is not None and y_raw is not None:
+                    x, y = int(x_raw), int(y_raw)
+                    if use_interception and HAS_INTERCEPTION:
+                        ic_mouse_move(x, y)
+                        ic_mouse_click(button, "mouseup")
+                    else:
+                        ctypes.windll.user32.SetCursorPos(x, y)
+                        flags_up = 0x0004 if button == "left" else (0x0010 if button == "right" else 0x0040)
+                        ctypes.windll.user32.mouse_event(flags_up, 0, 0, 0, 0)
                 else:
-                    ctypes.windll.user32.SetCursorPos(x, y)
-                    flags_up = 0x0004 if button == "left" else (0x0010 if button == "right" else 0x0040)
-                    ctypes.windll.user32.mouse_event(flags_up, 0, 0, 0, 0)
+                    # Release at current position
+                    if use_interception and HAS_INTERCEPTION:
+                        ic_mouse_click(button, "mouseup")
+                    else:
+                        flags_up = 0x0004 if button == "left" else (0x0010 if button == "right" else 0x0040)
+                        ctypes.windll.user32.mouse_event(flags_up, 0, 0, 0, 0)
             else:
-                pyautogui.mouseUp(x, y, button=button)
+                pyautogui.mouseUp(button=button)
+        elif action == "mousestep":
+            dx, dy = int(args.get("dx", 0)), int(args.get("dy", 0))
+            if platform.system() == "Windows":
+                if use_interception and HAS_INTERCEPTION:
+                    ic_mouse_move_relative(dx, dy)
+                else:
+                    ctypes.windll.user32.mouse_event(0x0001, dx, dy, 0, 0) # MOUSEEVENTF_MOVE
+            else:
+                pyautogui.moveRel(dx, dy)
         elif action == "scroll":
             dx, dy = int(args.get("dx", 0)), int(args.get("dy", 0))
             if platform.system() == "Windows":
@@ -2766,6 +3152,7 @@ def handle_input(ws, args):
                 pyautogui.press(key)
         elif action == "keydown":
             key = args.get("key")
+            print(f"[Input] Key DOWN: {key}")
             if platform.system() == "Windows":
                 vk = get_vk(key)
                 if vk:
@@ -2773,15 +3160,31 @@ def handle_input(ws, args):
                         ic_key_down(ctypes.windll.user32.MapVirtualKeyW(vk, 0))
                     else:
                         send_key_input(vk, False)
+                    
+                    # Start local repeat thread to simulate physical keyboard hold
+                    with HELD_KEYS_LOCK:
+                        if vk not in HELD_KEYS:
+                            stop_event = threading.Event()
+                            HELD_KEYS[vk] = stop_event
+                            threading.Thread(target=_key_repeater_task, 
+                                             args=(vk, use_interception, stop_event), 
+                                             daemon=True).start()
                 else:
                     pyautogui.keyDown(key)
             else:
                 pyautogui.keyDown(key)
         elif action == "keyup":
             key = args.get("key")
+            print(f"[Input] Key UP: {key}")
             if platform.system() == "Windows":
                 vk = get_vk(key)
                 if vk:
+                    # Stop local repeat
+                    with HELD_KEYS_LOCK:
+                        if vk in HELD_KEYS:
+                            HELD_KEYS[vk].set()
+                            del HELD_KEYS[vk]
+                            
                     if use_interception and HAS_INTERCEPTION:
                         ic_key_up(ctypes.windll.user32.MapVirtualKeyW(vk, 0))
                     else:
@@ -2989,15 +3392,20 @@ def handle_input(ws, args):
         pass # Ignore input errors to avoid spamming logs
 
 def handle_screen(ws, args):
-    global STREAM_RUNNING, STREAM_CONFIG, REINIT_CAMERA
+    global STREAM_RUNNING, STREAM_CONFIG, REINIT_CAMERA, FORCE_FULL_FRAME, FORCE_FULL_FRAME_UNTIL, VIEWER_COUNT
     if "screen" not in ENABLED_MODULES: return
     
     action = args.get("action", "start")
     if action == "stop":
-        STREAM_RUNNING = False
+        if VIEWER_COUNT <= 1:
+            STREAM_RUNNING = False
+        else:
+            print(f"[*] Screen stream stop ignored: {VIEWER_COUNT} viewers active")
     elif action == "refresh":
         REINIT_CAMERA = True
         STREAM_RUNNING = True
+        FORCE_FULL_FRAME = True
+        FORCE_FULL_FRAME_UNTIL = time.time() + 10
     elif action == "screenshot":
         try:
             import pyautogui
@@ -3022,6 +3430,7 @@ def handle_screen(ws, args):
             STREAM_CONFIG["scale"] = args.get("scale", 0.5)
             STREAM_CONFIG["compress"] = args.get("compress", False)
             STREAM_CONFIG["webp"] = args.get("webp", True)
+            STREAM_CONFIG["fps"] = args.get("fps", 30)
             
         # Wake up screen by slightly moving the mouse
         try:
@@ -3044,7 +3453,76 @@ def handle_screen(ws, args):
         except:
             pass
             
+        if not STREAM_RUNNING:
+            FORCE_FULL_FRAME = True
+            FORCE_FULL_FRAME_UNTIL = time.time() + 10
+            
         STREAM_RUNNING = True
+
+# --- 剪贴板自动同步 ---
+LAST_CLIPBOARD_TEXT = ""
+LAST_CLIPBOARD_IMAGE_HASH = ""
+CLIPBOARD_MONITOR_RUNNING = False
+CURRENT_WS = None
+
+def clipboard_monitor_task():
+    global LAST_CLIPBOARD_TEXT, LAST_CLIPBOARD_IMAGE_HASH, CLIPBOARD_MONITOR_RUNNING, CURRENT_WS
+    print("[*] Clipboard monitor thread started")
+    import pyperclip
+    from PIL import ImageGrab
+    import io
+    import hashlib
+    
+    # Try to get initial state to avoid immediate sync on startup
+    try:
+        LAST_CLIPBOARD_TEXT = pyperclip.paste()
+        img = ImageGrab.grabclipboard()
+        if img and not isinstance(img, list):
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            LAST_CLIPBOARD_IMAGE_HASH = hashlib.md5(buf.getvalue()).hexdigest()
+    except:
+        pass
+
+    while CLIPBOARD_MONITOR_RUNNING:
+        try:
+            if CURRENT_WS and SERVER_CONNECTED:
+                # 1. Check Text
+                current_text = pyperclip.paste()
+                if current_text != LAST_CLIPBOARD_TEXT:
+                    LAST_CLIPBOARD_TEXT = current_text
+                    if current_text:
+                        print(f"[*] Clipboard text changed, syncing (len: {len(current_text)})")
+                        safe_send(CURRENT_WS, json.dumps({
+                            "type": "clipboard",
+                            "data": current_text,
+                            "auto": True
+                        }))
+                
+                # 2. Check Image (Windows only for ImageGrab)
+                if platform.system() == "Windows":
+                    img = ImageGrab.grabclipboard()
+                    # ImageGrab.grabclipboard() returns an Image object or a list of file paths
+                    if img and not isinstance(img, list):
+                        buf = io.BytesIO()
+                        img.save(buf, format='PNG')
+                        img_data = buf.getvalue()
+                        current_hash = hashlib.md5(img_data).hexdigest()
+                        
+                        if current_hash != LAST_CLIPBOARD_IMAGE_HASH:
+                            LAST_CLIPBOARD_IMAGE_HASH = current_hash
+                            print(f"[*] Clipboard image changed, syncing (size: {len(img_data)})")
+                            base64_data = base64.b64encode(img_data).decode('utf-8')
+                            safe_send(CURRENT_WS, json.dumps({
+                                "type": "clipboard_image",
+                                "data": base64_data,
+                                "auto": True
+                            }))
+        except Exception as e:
+            pass
+            
+        time.sleep(2.0) # Poll every 2 seconds for image + text
+    print("[*] Clipboard monitor thread stopped")
 
 def handle_clipboard(ws, args):
     if "screen" not in ENABLED_MODULES: return
@@ -3520,14 +3998,17 @@ def handle_windows(ws, args):
         safe_send(ws, json.dumps({"type": "error", "data": f"Windows error: {str(e)}"}))
 
 def handle_window_stream(ws, args):
-    global STREAM_RUNNING, STREAM_CONFIG
+    global STREAM_RUNNING, STREAM_CONFIG, VIEWER_COUNT
     if "windows" not in ENABLED_MODULES: return
     
     action = args.get("action", "start")
     hwnd = args.get("id")
     
     if action == "stop":
-        STREAM_RUNNING = False
+        if VIEWER_COUNT <= 1:
+            STREAM_RUNNING = False
+        else:
+            print(f"[*] Window stream stop ignored: {VIEWER_COUNT} viewers active")
     else:
         if not hwnd: return
         with STREAM_LOCK:
@@ -3537,6 +4018,7 @@ def handle_window_stream(ws, args):
             STREAM_CONFIG["scale"] = args.get("scale", 0.5)
             STREAM_CONFIG["compress"] = args.get("compress", False)
             STREAM_CONFIG["webp"] = args.get("webp", True)
+            STREAM_CONFIG["fps"] = args.get("fps", 30)
         
         if platform.system() == "Windows":
              try:
@@ -3571,7 +4053,8 @@ def handle_window_input(ws, args):
     if "windows" not in ENABLED_MODULES: return
     action = args.get("action")
     hwnd = args.get("id")
-    use_interception = args.get("useInterception", True)
+    # Window mode defaults to API click unless explicitly requested otherwise
+    use_interception = args.get("useInterception", False)
     if not hwnd: return
     
     if platform.system() == "Windows":
@@ -3590,12 +4073,29 @@ def handle_window_input(ws, args):
                 return x, y
 
         # Bring window to foreground for reliable input
+        # Note: PostMessage based non-occupying clicks don't strictly require foreground,
+        # but bringing to front is kept for compatibility with current behavior unless driver is used.
         if action in ["click", "mousedown", "mouseup", "mousemove", "keypress", "type", "scroll"]:
             try:
+                # If we are using interception, we MUST be in front
+                # If we are using PostMessage (no interception), it's optional but usually safer
                 user32.ShowWindow(hwnd, 9) # SW_RESTORE
                 user32.SetForegroundWindow(hwnd)
             except Exception:
                 pass
+
+        # Windows Message Constants for non-occupying clicks
+        WM_LBUTTONDOWN = 0x0201
+        WM_LBUTTONUP = 0x0202
+        WM_RBUTTONDOWN = 0x0204
+        WM_RBUTTONUP = 0x0205
+        WM_MBUTTONDOWN = 0x0207
+        WM_MBUTTONUP = 0x0208
+        WM_MOUSEMOVE = 0x0200
+        WM_MOUSEWHEEL = 0x020A
+        MK_LBUTTON = 0x0001
+        MK_RBUTTON = 0x0002
+        MK_MBUTTON = 0x0010
 
         if action == "click":
             x, y = args.get("x"), args.get("y")
@@ -3603,17 +4103,19 @@ def handle_window_input(ws, args):
             x = int(x) if x is not None else 0
             y = int(y) if y is not None else 0
             
-            abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
             if use_interception and HAS_INTERCEPTION:
+                abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
                 ic_mouse_move(abs_x, abs_y)
                 ic_mouse_click(button, "click")
             else:
-                user32.SetCursorPos(abs_x, abs_y)
-                flags_down = 0x0002 if button == "left" else (0x0008 if button == "right" else 0x0020)
-                flags_up = 0x0004 if button == "left" else (0x0010 if button == "right" else 0x0040)
-                user32.mouse_event(flags_down, 0, 0, 0, 0)
-                time.sleep(0.05)
-                user32.mouse_event(flags_up, 0, 0, 0, 0)
+                # PostMessage based click - does not move physical cursor
+                msg_down = WM_LBUTTONDOWN if button == "left" else (WM_RBUTTONDOWN if button == "right" else WM_MBUTTONDOWN)
+                msg_up = WM_LBUTTONUP if button == "left" else (WM_RBUTTONUP if button == "right" else WM_MBUTTONUP)
+                wparam = MK_LBUTTON if button == "left" else (MK_RBUTTON if button == "right" else MK_MBUTTON)
+                lparam = (y << 16) | (x & 0xFFFF)
+                user32.PostMessageW(hwnd, msg_down, wparam, lparam)
+                time.sleep(0.01)
+                user32.PostMessageW(hwnd, msg_up, 0, lparam)
                 
         elif action == "doubleclick":
             x, y = args.get("x"), args.get("y")
@@ -3621,25 +4123,24 @@ def handle_window_input(ws, args):
             x = int(x) if x is not None else 0
             y = int(y) if y is not None else 0
             
-            abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
             if use_interception and HAS_INTERCEPTION:
+                abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
                 ic_mouse_move(abs_x, abs_y)
                 ic_mouse_click(button, "click")
                 time.sleep(0.05)
                 ic_mouse_click(button, "click")
             else:
-                user32.SetCursorPos(abs_x, abs_y)
-                flags_down = 0x0002 if button == "left" else (0x0008 if button == "right" else 0x0020)
-                flags_up = 0x0004 if button == "left" else (0x0010 if button == "right" else 0x0040)
-                # 1
-                user32.mouse_event(flags_down, 0, 0, 0, 0)
-                time.sleep(0.02)
-                user32.mouse_event(flags_up, 0, 0, 0, 0)
-                time.sleep(0.05)
-                # 2
-                user32.mouse_event(flags_down, 0, 0, 0, 0)
-                time.sleep(0.02)
-                user32.mouse_event(flags_up, 0, 0, 0, 0)
+                msg_down = WM_LBUTTONDOWN if button == "left" else (WM_RBUTTONDOWN if button == "right" else WM_MBUTTONDOWN)
+                msg_up = WM_LBUTTONUP if button == "left" else (WM_RBUTTONUP if button == "right" else WM_MBUTTONUP)
+                wparam = MK_LBUTTON if button == "left" else (MK_RBUTTON if button == "right" else MK_MBUTTON)
+                lparam = (y << 16) | (x & 0xFFFF)
+                # First click
+                user32.PostMessageW(hwnd, msg_down, wparam, lparam)
+                user32.PostMessageW(hwnd, msg_up, 0, lparam)
+                time.sleep(0.01)
+                # Second click
+                user32.PostMessageW(hwnd, msg_down, wparam, lparam)
+                user32.PostMessageW(hwnd, msg_up, 0, lparam)
                 
         elif action == "mousedown":
             x, y = args.get("x"), args.get("y")
@@ -3647,15 +4148,15 @@ def handle_window_input(ws, args):
             x = int(x) if x is not None else 0
             y = int(y) if y is not None else 0
             
-            abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
             if use_interception and HAS_INTERCEPTION:
+                abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
                 ic_mouse_move(abs_x, abs_y)
                 ic_mouse_click(button, "mousedown")
             else:
-                user32.SetCursorPos(abs_x, abs_y)
-                flags_down = 0x0002 if button == "left" else (0x0008 if button == "right" else 0x0020)
-                user32.mouse_event(flags_down, 0, 0, 0, 0)
-                time.sleep(0.02)
+                msg_down = WM_LBUTTONDOWN if button == "left" else (WM_RBUTTONDOWN if button == "right" else WM_MBUTTONDOWN)
+                wparam = MK_LBUTTON if button == "left" else (MK_RBUTTON if button == "right" else MK_MBUTTON)
+                lparam = (y << 16) | (x & 0xFFFF)
+                user32.PostMessageW(hwnd, msg_down, wparam, lparam)
                 
         elif action == "mouseup":
             x, y = args.get("x"), args.get("y")
@@ -3663,31 +4164,40 @@ def handle_window_input(ws, args):
             x = int(x) if x is not None else 0
             y = int(y) if y is not None else 0
             
-            abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
             if use_interception and HAS_INTERCEPTION:
+                abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
                 ic_mouse_move(abs_x, abs_y)
                 ic_mouse_click(button, "mouseup")
             else:
-                user32.SetCursorPos(abs_x, abs_y)
-                flags_up = 0x0004 if button == "left" else (0x0010 if button == "right" else 0x0040)
-                user32.mouse_event(flags_up, 0, 0, 0, 0)
+                msg_up = WM_LBUTTONUP if button == "left" else (WM_RBUTTONUP if button == "right" else WM_MBUTTONUP)
+                lparam = (y << 16) | (x & 0xFFFF)
+                user32.PostMessageW(hwnd, msg_up, 0, lparam)
                 
         elif action == "mousemove":
             x, y = args.get("x"), args.get("y")
             x = int(x) if x is not None else 0
             y = int(y) if y is not None else 0
-            abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
             if use_interception and HAS_INTERCEPTION:
+                abs_x, abs_y = get_absolute_coordinates(hwnd, x, y)
                 ic_mouse_move(abs_x, abs_y)
             else:
-                user32.SetCursorPos(abs_x, abs_y)
+                lparam = (y << 16) | (x & 0xFFFF)
+                user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
             
         elif action == "scroll":
             dx, dy = int(args.get("dx", 0)), int(args.get("dy", 0))
             if use_interception and HAS_INTERCEPTION:
                 ic_mouse_scroll(-dy)
             else:
-                user32.mouse_event(0x0800, 0, 0, -dy, 0)
+                # WM_MOUSEWHEEL: wParam high word is distance, low word is keys
+                # lParam is screen coordinates, but PostMessage often works with window-relative too if processed by window
+                # However, mouse_event was global. For non-occupying scroll, we try PostMessage to hwnd.
+                wparam = (-dy << 16)
+                # WM_MOUSEWHEEL usually expects screen coordinates in lParam
+                x, y = args.get("x", 0), args.get("y", 0)
+                abs_x, abs_y = get_absolute_coordinates(hwnd, int(x), int(y))
+                lparam = (abs_y << 16) | (abs_x & 0xFFFF)
+                user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
 
         elif action == "keypress":
             key = args.get("key")
@@ -3704,6 +4214,7 @@ def handle_window_input(ws, args):
                 pyautogui.press(key)
         elif action == "keydown":
             key = args.get("key")
+            print(f"[WindowInput] Key DOWN: {key}")
             if platform.system() == "Windows":
                 vk = get_vk(key)
                 if vk:
@@ -3711,15 +4222,31 @@ def handle_window_input(ws, args):
                         ic_key_down(ctypes.windll.user32.MapVirtualKeyW(vk, 0))
                     else:
                         send_key_input(vk, False)
+                        
+                    # Start local repeat thread to simulate physical keyboard hold
+                    with HELD_KEYS_LOCK:
+                        if vk not in HELD_KEYS:
+                            stop_event = threading.Event()
+                            HELD_KEYS[vk] = stop_event
+                            threading.Thread(target=_key_repeater_task, 
+                                             args=(vk, use_interception, stop_event), 
+                                             daemon=True).start()
                 else:
                     pyautogui.keyDown(key)
             else:
                 pyautogui.keyDown(key)
         elif action == "keyup":
             key = args.get("key")
+            print(f"[WindowInput] Key UP: {key}")
             if platform.system() == "Windows":
                 vk = get_vk(key)
                 if vk:
+                    # Stop local repeat
+                    with HELD_KEYS_LOCK:
+                        if vk in HELD_KEYS:
+                            HELD_KEYS[vk].set()
+                            del HELD_KEYS[vk]
+                            
                     if use_interception and HAS_INTERCEPTION:
                         ic_key_up(ctypes.windll.user32.MapVirtualKeyW(vk, 0))
                     else:
@@ -3844,6 +4371,85 @@ def handle_window_input(ws, args):
                 except Exception as e:
                     print(f"Hotkey error: {e}")
 
+def get_audio_manager():
+    global AUDIO_MANAGER
+    if AUDIO_MANAGER is None:
+        with AUDIO_MANAGER_LOCK:
+            if AUDIO_MANAGER is None and HAS_PYAUDIO:
+                try:
+                    AUDIO_MANAGER = pyaudio.PyAudio()
+                except Exception as e:
+                    print(f"[-] Failed to initialize PyAudio: {e}")
+    return AUDIO_MANAGER
+
+def audio_playback_worker():
+    global AUDIO_PLAYER_STREAM
+    print("[*] Audio playback worker started")
+    
+    if platform.system() == "Windows":
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except: pass
+        
+    decoder = None
+    try:
+        import opuslib
+        decoder = opuslib.Decoder(AUDIO_RATE, AUDIO_CHANNELS)
+        print("[+] Audio decoder initialized (Opus)")
+    except:
+        print("[-] Audio decoder initialized (PCM only)")
+
+    am = get_audio_manager()
+    if not am:
+        print("[-] Audio manager not available, playback worker exiting")
+        return
+
+    while True:
+        try:
+            data_b64 = AUDIO_PLAY_QUEUE.get()
+            if data_b64 is None: break
+            
+            raw_data = base64.b64decode(data_b64)
+            if not raw_data: continue
+            
+            # Check header: 0x03 is Opus, 0x02 is PCM
+            try:
+                if raw_data[0] == 3: # Opus
+                    if decoder:
+                        play_data = decoder.decode(raw_data[1:], AUDIO_CHUNK)
+                    else:
+                        continue # Skip if no decoder
+                elif raw_data[0] == 2: # PCM
+                    play_data = raw_data[1:]
+                else:
+                    # Fallback for old versions or raw data
+                    play_data = raw_data
+                
+                if AUDIO_PLAYER_STREAM is None:
+                    AUDIO_PLAYER_STREAM = am.open(format=AUDIO_FORMAT,
+                                                channels=AUDIO_CHANNELS,
+                                                rate=AUDIO_RATE,
+                                                output=True,
+                                                frames_per_buffer=AUDIO_CHUNK)
+                
+                AUDIO_PLAYER_STREAM.write(play_data)
+            except Exception as e:
+                print(f"[-] Audio playback write error: {e}")
+                if AUDIO_PLAYER_STREAM:
+                    try: AUDIO_PLAYER_STREAM.close()
+                    except: pass
+                    AUDIO_PLAYER_STREAM = None
+        except Exception as e:
+            print(f"[-] Audio playback queue error: {e}")
+            
+    if platform.system() == "Windows":
+        try:
+            import comtypes
+            comtypes.CoUninitialize()
+        except: pass
+    print("[*] Audio playback worker stopped")
+
 def audio_worker():
     global AUDIO_STREAM_RUNNING
     print("[*] Audio worker thread started", flush=True)
@@ -3866,7 +4472,10 @@ def audio_worker():
         return
     
     print(f"[*] Audio capture initialized. HAS_PYAUDIO: {HAS_PYAUDIO}", flush=True)
-    p = pyaudio.PyAudio()
+    p = get_audio_manager()
+    if not p:
+        print("[-] Audio manager not available, audio worker exiting")
+        return
     try:
         # Try to find the best device for PC audio capture
         device_index = None
@@ -3983,7 +4592,6 @@ def audio_worker():
     except Exception as e:
         print(f"[-] Audio capture error: {e}")
     finally:
-        p.terminate()
         print("[*] Audio stream stopped")
         if platform.system() == "Windows":
             try:
@@ -3993,7 +4601,7 @@ def audio_worker():
                 pass
 
 def handle_audio(ws, args):
-    global AUDIO_STREAM_RUNNING
+    global AUDIO_STREAM_RUNNING, VIEWER_COUNT
     action = args.get("action")
     print(f"[*] Audio command received: {action}")
     
@@ -4006,26 +4614,25 @@ def handle_audio(ws, args):
             AUDIO_STREAM_RUNNING = True
             threading.Thread(target=audio_worker, daemon=True).start()
     elif action == "stop_listen":
-        AUDIO_STREAM_RUNNING = False
+        if VIEWER_COUNT <= 1:
+            AUDIO_STREAM_RUNNING = False
+        else:
+            print(f"[*] Audio stream stop ignored: {VIEWER_COUNT} viewers active")
 
 def handle_audio_input(ws, args):
-    global AUDIO_PLAYER, AUDIO_PLAYER_STREAM
+    global AUDIO_PLAY_THREAD
     if "audio" not in ENABLED_MODULES or not HAS_PYAUDIO: return
     
     data_b64 = args.get("data")
     if not data_b64: return
     
-    try:
-        data = base64.b64decode(data_b64)
-        if AUDIO_PLAYER is None:
-            AUDIO_PLAYER = pyaudio.PyAudio()
-            AUDIO_PLAYER_STREAM = AUDIO_PLAYER.open(format=AUDIO_FORMAT,
-                                                    channels=AUDIO_CHANNELS,
-                                                    rate=AUDIO_RATE,
-                                                    output=True)
-        AUDIO_PLAYER_STREAM.write(data)
-    except Exception as e:
-        print(f"[-] Audio play error: {e}")
+    # Start playback worker if not running
+    if AUDIO_PLAY_THREAD is None or not AUDIO_PLAY_THREAD.is_alive():
+        AUDIO_PLAY_THREAD = threading.Thread(target=audio_playback_worker, name="Audio-Playback", daemon=True)
+        AUDIO_PLAY_THREAD.start()
+        
+    # Put into queue - non-blocking for the message thread
+    AUDIO_PLAY_QUEUE.put(data_b64)
 
 PRIVACY_WINDOW = None
 PRIVACY_LABEL = None
@@ -4344,7 +4951,7 @@ def handle_verify_result(ws, args):
 
 def on_message(ws, message):
     def process_message(msg):
-        global CURRENT_DIR, DEVICE_PASSWORD
+        global CURRENT_DIR, DEVICE_PASSWORD, VIEWER_COUNT
         try:
             data = json.loads(msg)
             cmd = data.get("command") or data.get("type")
@@ -4385,9 +4992,9 @@ def on_message(ws, message):
                 success = data.get("success", False)
                 message = data.get("message", "未知错误")
                 if success:
-                    messagebox.showinfo("协助请求", "对方已接受您的协助请求！")
+                    show_notification("协助请求", "对方已接受您的协助请求！")
                 else:
-                    messagebox.showerror("协助请求", f"请求失败: {message}")
+                    show_notification("协助请求", f"请求失败: {message}", msg_type="error")
                 
             elif cmd == "turn_config":
                 global RTC_CONFIG_FUTURE
@@ -4396,27 +5003,90 @@ def on_message(ws, message):
                     RTC_LOOP.call_soon_threadsafe(lambda: RTC_CONFIG_FUTURE.set_result(enc_data) if not RTC_CONFIG_FUTURE.done() else None)
 
             elif cmd == "webrtc_offer":
+                client_id = data.get("clientId", "default")
+                client_ip = data.get("ip", "未知")
+                print(f"[*] 收到 WebRTC Offer (Client: {client_id}, IP: {client_ip}). 状态检查: HAS_AIORTC={HAS_AIORTC}, RTC_LOOP={RTC_LOOP is not None}")
                 if not HAS_AIORTC:
                     print("[-] 错误: aiortc 库未安装，无法建立 WebRTC 连接！")
-                    print("    请在您的终端/命令行执行以下命令安装所有必需依赖：")
-                    print("    pip install aiortc websocket-client psutil pyautogui mss Pillow dxcam numpy pyaudio pystray pywebview certifi")
-                elif not RTC_LOOP:
-                    print("[-] 错误: RTC_LOOP 未初始化！")
+                elif not RTC_LOOP or not RTC_LOOP.is_running():
+                    print("[-] 错误: RTC_LOOP 未运行或已损坏！正在尝试紧急恢复...")
+                    try:
+                        # 尝试原地重新启动 loop
+                        def emergency_restart():
+                            global RTC_LOOP
+                            print("[*] 正在执行 RTC_LOOP 紧急重启...")
+                            start_rtc_loop()
+                        threading.Thread(target=emergency_restart, name="WebRTC-Emergency", daemon=True).start()
+                        time.sleep(1) # 等待一秒启动
+                        if RTC_LOOP and RTC_LOOP.is_running():
+                            print("[+] RTC_LOOP 紧急重启成功")
+                            sdp = args.get("sdp")
+                            if sdp:
+                                print(f"[*] 正在向 RTC_LOOP 提交 setup_webrtc 任务 (Client: {client_id})...")
+                                future = asyncio.run_coroutine_threadsafe(setup_webrtc(sdp, client_id, client_ip), RTC_LOOP)
+                                
+                                def on_task_done(fut):
+                                    try:
+                                        fut.result()
+                                        print(f"[+] setup_webrtc 任务已在 RTC_LOOP 中顺利完成 (Client: {client_id})")
+                                    except Exception as te:
+                                        print(f"[-] setup_webrtc 任务执行失败 ({client_id}): {te}")
+                                
+                                future.add_done_callback(on_task_done)
+                        else:
+                            print("[-] RTC_LOOP 紧急重启失败")
+                    except Exception as re_e:
+                        print(f"[-] 紧急重启异常: {re_e}")
                 else:
                     sdp = args.get("sdp")
                     if sdp:
                         try:
-                            asyncio.run_coroutine_threadsafe(setup_webrtc(sdp), RTC_LOOP)
+                            print(f"[*] 正在向 RTC_LOOP 提交 setup_webrtc 任务 (Client: {client_id})...")
+                            future = asyncio.run_coroutine_threadsafe(setup_webrtc(sdp, client_id, client_ip), RTC_LOOP)
+                            
+                            def on_task_done(fut):
+                                try:
+                                    fut.result()
+                                    print(f"[+] setup_webrtc 任务已在 RTC_LOOP 中顺利完成 (Client: {client_id})")
+                                except Exception as te:
+                                    print(f"[-] setup_webrtc 任务执行失败 ({client_id}): {te}")
+                            
+                            future.add_done_callback(on_task_done)
+                            
                         except Exception as e:
-                            print(f"[-] 提交 setup_webrtc 任务失败: {e}")
+                            print(f"[-] 提交 setup_webrtc 任务失败 ({client_id}): {e}")
             elif cmd == "webrtc_ice_candidate":
-                if HAS_AIORTC and RTC_LOOP:
+                client_id = data.get("clientId", "default")
+                if HAS_AIORTC and RTC_LOOP and RTC_LOOP.is_running():
                     candidate = args.get("candidate")
                     if candidate:
                         try:
-                            asyncio.run_coroutine_threadsafe(add_ice_candidate(candidate), RTC_LOOP)
+                            asyncio.run_coroutine_threadsafe(add_ice_candidate(candidate, client_id), RTC_LOOP)
                         except Exception as e:
-                            print(f"[-] 提交 add_ice_candidate 任务失败: {e}")
+                            print(f"[-] 提交 add_ice_candidate 任务失败 ({client_id}): {e}")
+            elif cmd == "webrtc_close":
+                client_id = data.get("clientId")
+                if client_id and client_id in RTC_PCS:
+                    print(f"[*] 正在关闭客户端 {client_id} 的 WebRTC 连接...")
+                    if client_id in ACTIVE_CONTROLLERS:
+                        info = ACTIVE_CONTROLLERS.pop(client_id)
+                        log_connection_history({
+                            "id": client_id,
+                            "ip": info["ip"],
+                            "start": info["start_time"],
+                            "end": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "start_ts": info.get("start_timestamp", time.time()),
+                            "end_ts": time.time()
+                        })
+                    pc = RTC_PCS.get(client_id)
+                    if pc:
+                        if RTC_LOOP:
+                            asyncio.run_coroutine_threadsafe(pc.close(), RTC_LOOP)
+                        else:
+                            # Fallback if loop is not available (unlikely)
+                            pass
+                    if client_id in RTC_PCS: del RTC_PCS[client_id]
+                    if client_id in RTC_DCS: del RTC_DCS[client_id]
             elif cmd == "exec" and "terminal" in ENABLED_MODULES:
                 try:
                     cmd_str = str(args).strip()
@@ -4530,6 +5200,7 @@ def on_message(ws, message):
             elif cmd == "viewer_count":
                 try:
                     count = args.get("count", 0)
+                    VIEWER_COUNT = count
                     if 'update_viewer_count' in globals():
                         globals()['update_viewer_count'](count)
                 except Exception as e:
@@ -4728,9 +5399,16 @@ def on_close(ws, close_status_code, close_msg):
     print("[-] Connection closed")
 
 def on_open(ws):
-    global SERVER_CONNECTED, CLIENT_ROLE
+    global SERVER_CONNECTED, CLIENT_ROLE, FORCE_FULL_FRAME_UNTIL, CLIPBOARD_MONITOR_RUNNING, CURRENT_WS
     SERVER_CONNECTED = True
-    print(f"[+] Connected to server as {CLIENT_ROLE}")
+    CURRENT_WS = ws
+    FORCE_FULL_FRAME_UNTIL = time.time() + 10
+    print(f"[+] Connected to server as {CLIENT_ROLE}, will send full frames for 10s")
+    
+    # Start clipboard monitor if not already running
+    if not CLIPBOARD_MONITOR_RUNNING:
+        CLIPBOARD_MONITOR_RUNNING = True
+        threading.Thread(target=clipboard_monitor_task, daemon=True).start()
     
     # Sync auth info immediately after handshake
     sync_auth_info(ws)
@@ -4740,7 +5418,7 @@ def on_open(ws):
     info = get_system_info()
     safe_send(ws, json.dumps({
         "type": "register",
-        "deviceId": DEVICE_ID,
+        "deviceId": DEVICE_ID.replace(" ", ""),
         "password": DEVICE_PASSWORD,
         "role": CLIENT_ROLE,
         "data": info,
@@ -5477,12 +6155,14 @@ def start_local_ui():
         tk.Label(frame_control, text="点击下方按钮在浏览器中打开控制端网页即可控制其他设备", justify="center").pack(pady=10)
         
         def open_web():
-            port_str = str(PORT)
-            protocol = "https" if port_str == "443" else "http"
-            if port_str in ["80", "443", ""]:
-                url = f"{protocol}://{HOST}"
-            else:
-                url = f"{protocol}://{HOST}:{PORT}"
+            url = APP_URL
+            
+            # Add current device info to URL for one-click connection
+            clean_id = DEVICE_ID.replace(" ", "")
+            if url.endswith("/"):
+                url = url[:-1]
+            url += f"?deviceId={clean_id}&password={DEVICE_PASSWORD}&autostart=true"
+            
             webbrowser.open(url)
             
         ttk.Button(frame_control, text="打开控制端网页", command=open_web).pack(pady=10)
@@ -5622,21 +6302,25 @@ def connect(role="service"):
     # Only start native Tkinter UI if webview is not available or disabled
     use_webview = HAS_WEBVIEW and "--no-ui" not in sys.argv
     if PLATFORM_MODE == "pc" and HAS_TKINTER and role in ["desktop", "portable"] and not use_webview:
-        threading.Thread(target=start_local_ui, daemon=True).start()
+        # Check if already running to avoid leaks
+        ui_thread_exists = any(t.name == "Local-UI" for t in threading.enumerate())
+        if not ui_thread_exists:
+            threading.Thread(target=start_local_ui, name="Local-UI", daemon=True).start()
 
     # Start stream worker thread if screen module is enabled and role is desktop or portable
     if "screen" in ENABLED_MODULES and role in ["desktop", "portable"]:
-        t = threading.Thread(target=stream_worker, daemon=True)
-        t.start()
+        stream_thread_exists = any(t.name == "Stream-Worker" for t in threading.enumerate())
+        if not stream_thread_exists:
+            t = threading.Thread(target=stream_worker, name="Stream-Worker", daemon=True)
+            t.start()
     
     # Start heartbeat worker to proactively identify to server (helps after server restart)
     def heartbeat_worker():
+        print("[*] Heartbeat worker started")
         while True:
             if SERVER_CONNECTED and WS_CLIENT:
                 try:
                     info = get_system_info()
-                    # Use register message for heartbeat to ensure server always has full info
-                    # even if it just restarted and lost our state
                     safe_send(WS_CLIENT, json.dumps({
                         "type": "register",
                         "deviceId": DEVICE_ID.replace(" ", ""),
@@ -5648,8 +6332,10 @@ def connect(role="service"):
                 except: pass
             time.sleep(10)
     
-    t_hb = threading.Thread(target=heartbeat_worker, daemon=True)
-    t_hb.start()
+    hb_thread_exists = any(t.name == "Heartbeat-Worker" for t in threading.enumerate())
+    if not hb_thread_exists:
+        t_hb = threading.Thread(target=heartbeat_worker, name="Heartbeat-Worker", daemon=True)
+        t_hb.start()
         
     while True:
         try:
@@ -5710,8 +6396,33 @@ class RootDeskBridge:
             "versionCode": CLIENT_VERSION,
             "hasInterception": HAS_INTERCEPTION,
             "hasService": HAS_SERVICE,
-            "isAdmin": is_admin() if platform.system() == "Windows" else True
+            "isAdmin": is_admin() if platform.system() == "Windows" else True,
+            "activeControllers": list(ACTIVE_CONTROLLERS.values())
         }
+
+    def get_active_controllers(self):
+        return list(ACTIVE_CONTROLLERS.values())
+
+    def get_connection_history(self, page=1, page_size=10):
+        try:
+            history = []
+            if os.path.exists(CONNECTION_HISTORY_FILE):
+                with open(CONNECTION_HISTORY_FILE, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            
+            total = len(history)
+            start = (page - 1) * page_size
+            end = start + page_size
+            
+            return {
+                "success": True,
+                "history": history[start:end],
+                "total": total,
+                "page": page,
+                "pageSize": page_size
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "history": []}
 
     def decrypt_password(self, encrypted_pwd):
         """解密密码给前端使用"""
@@ -5815,7 +6526,7 @@ class RootDeskBridge:
             HAS_SERVICE = check_service_installed()
             # 驱动加载需要重启或重新初始化 Context，这里只是尝试安装，具体生效可能需要重启
             
-            return {"success": True, "message": "".join(results)}
+            return {"success": True, "message": "\n".join(results)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -5823,6 +6534,25 @@ class RootDeskBridge:
         import webbrowser
         webbrowser.open(url)
         return {"success": True}
+
+    def open_web_console(self):
+        """Expose open_web logic to webview UI"""
+        try:
+            url = APP_URL
+            
+            # Add current device info to URL for one-click connection
+            clean_id = DEVICE_ID.replace(" ", "")
+            if url.endswith("/"):
+                url = url[:-1]
+            url += f"?deviceId={clean_id}&password={DEVICE_PASSWORD}&autostart=true"
+            
+            import webbrowser
+            webbrowser.open(url)
+            return {"success": True}
+        except Exception as e:
+            print(f"[Bridge] open_web error: {e}")
+            # 弹框提示 打开地址失败
+            return {"success": False, "error": str(e)}
 
     def update_setting(self, key, value):
         try:
@@ -5852,6 +6582,39 @@ class RootDeskBridge:
             connect(remoteId, remotePassword)
             return {"success": True}
         except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def invite_assistance(self, assistance_code):
+        """发送协助请求给指定的协助码"""
+        try:
+            # 检查连接状态
+            ws = globals().get('WS_CLIENT')
+            connected = globals().get('SERVER_CONNECTED', False)
+            
+            if not ws or not connected:
+                return {"success": False, "error": "尚未连接到服务器，请检查网络"}
+
+            import platform
+            info = {
+                "hostname": platform.node(),
+                "platform": platform.system().lower(),
+                "os": f"{platform.system()} {platform.release()}"
+            }
+
+            msg = {
+                "type": "assistance_request",
+                "code": str(assistance_code).strip().replace(" ", ""),
+                "deviceId": DEVICE_ID.replace(" ", ""),
+                "password": DEVICE_PASSWORD,
+                "info": info
+            }
+
+            if safe_send(ws, json.dumps(msg)):
+                return {"success": True}
+            else:
+                return {"success": False, "error": "发送消息失败"}
+        except Exception as e:
+            print(f"[Bridge] invite_assistance error: {e}")
             return {"success": False, "error": str(e)}
 
     def refresh_device_id(self):
@@ -6049,7 +6812,6 @@ def start_webview_ui():
 
     bridge = RootDeskBridge()
     print(f"[*] 启动 WebView UI: {ui_path}")
-    
     # 禁用 WebView2 的后台任务，防止触发 360 的 BITS 任务报警
     if platform.system() == "Windows":
         os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
@@ -6061,7 +6823,6 @@ def start_webview_ui():
             "--metrics-recording-only"
         )
         print("[*] 已配置 WebView2 参数以禁用后台任务")
-
     WEBVIEW_WINDOW = webview.create_window(f'RootDesk v{CLIENT_VERSION_NAME}', url=ui_path, js_api=bridge, width=1124, height=768)
     WEBVIEW_WINDOW.events.closing += on_webview_closing
     webview.start()

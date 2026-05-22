@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import {
   Maximize2,
   Minimize2,
@@ -31,8 +31,16 @@ import {
   Hand,
   Crosshair,
   MessageSquare,
-  HelpCircle
+  HelpCircle,
+  Smartphone,
+  Menu,
+  Settings,
+  ChevronDown,
+  Monitor,
+  Sparkles,
+  Zap
 } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -61,6 +69,184 @@ import { useNotification } from "@/components/ui/custom-notification"
 import { OpusDecoder } from "opus-decoder"
 import { ChatPanel } from "./chat-panel"
 import pako from 'pako'
+import { KeymapEditor, KeymapCanvas, EditorProvider, KeymapToolbar, KeymapProperties, KeymapKeyboardOverlay } from "@/components/keymap"
+import { useKeymapStore } from "@/components/keymap/use-keymap-store"
+
+interface ToolbarAction {
+  id?: string;
+  icon: any;
+  label: string;
+  active?: boolean;
+  onClick?: () => void;
+  dropdown?: { label: string; onClick: () => void; destructive?: boolean; keepOpen?: boolean; active?: boolean }[];
+  destructive?: boolean;
+  disabled?: boolean;
+  className?: string;
+  badge?: number | string;
+  hideOnMobile?: boolean;
+  hideOnPC?: boolean;
+}
+
+interface MobileFloatingMenuProps {
+  actions: ToolbarAction[];
+  isLandscape: boolean;
+}
+
+const MobileFloatingMenu = ({ actions, isLandscape }: MobileFloatingMenuProps) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeDropdown, setActiveDropdown] = useState<number | null>(null);
+
+  const stopPropagation = (e: React.PointerEvent | React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+  };
+
+  return (
+    <div 
+      className="absolute inset-0 pointer-events-none z-[100]"
+      onPointerDown={stopPropagation}
+      onMouseDown={stopPropagation}
+      onTouchStart={stopPropagation}
+    >
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/40 pointer-events-auto backdrop-blur-[2px]"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsOpen(false);
+            }}
+            onPointerDown={stopPropagation}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            className={cn(
+              "absolute right-4 pointer-events-auto bg-card/95 backdrop-blur-md border border-border rounded-3xl shadow-2xl overflow-hidden flex flex-col min-w-[200px] max-w-[260px]",
+              isLandscape ? "bottom-20" : "bottom-24"
+            )}
+            style={{ 
+              maxHeight: isLandscape ? 'calc(100% - 100px)' : 'calc(100% - 140px)'
+            }}
+            onPointerDown={stopPropagation}
+          >
+            <div className="p-2 overflow-y-auto custom-scrollbar">
+              <div className="flex items-center justify-between px-4 py-2 mb-1 border-b border-border/50">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">菜单</span>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsOpen(false);
+                  }} 
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {actions.filter(action => !action.hideOnMobile).map((action, i) => (
+                <div key={i} className="flex flex-col">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (action.dropdown) {
+                        setActiveDropdown(activeDropdown === i ? null : i);
+                      } else {
+                        action.onClick?.();
+                        setIsOpen(false);
+                      }
+                    }}
+                    onPointerDown={stopPropagation}
+                    className={cn(
+                      "flex items-center gap-3 w-full px-4 py-3 rounded-xl transition-all active:scale-95",
+                      action.active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted",
+                      action.destructive && "text-destructive",
+                      action.disabled && "opacity-50 grayscale cursor-not-allowed"
+                    )}
+                    disabled={action.disabled}
+                  >
+                    <div className="relative flex items-center justify-center w-6 h-6">
+                      <action.icon className={cn("h-5 w-5", action.className?.includes('rotate-90') && "rotate-90")} />
+                      {action.badge && (
+                        <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[8px] font-bold text-white border-2 border-card">
+                          {action.badge}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-sm font-medium flex-1 text-left">{action.label}</span>
+                    {action.dropdown && (
+                      <ChevronDown className={cn("h-4 w-4 transition-transform opacity-50", activeDropdown === i && "rotate-180")} />
+                    )}
+                  </button>
+                  
+                  {action.dropdown && activeDropdown === i && (
+                    <motion.div 
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="flex flex-col pl-10 pr-2 pb-2 gap-1 overflow-hidden bg-muted/30 rounded-xl mt-1"
+                    >
+                      {action.dropdown.map((item: any, j: number) => (
+                        <button
+                          key={j}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            item.onClick();
+                            if (!item.keepOpen) {
+                              setIsOpen(false);
+                            }
+                          }}
+                          onPointerDown={stopPropagation}
+                          className={cn(
+                            "text-left py-2.5 px-3 text-xs rounded-lg transition-colors active:scale-95 flex items-center justify-between",
+                            item.active ? "bg-primary/20 text-primary font-bold" : "text-muted-foreground hover:bg-muted",
+                            item.destructive && "text-destructive"
+                          )}
+                        >
+                          <span>{item.label}</span>
+                          {item.active && <div className="w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_8px_rgba(var(--primary),0.5)]" />}
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <motion.div
+        className="absolute bottom-6 right-6 pointer-events-auto w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.3)] flex items-center justify-center z-[110] border-2 border-white/20 backdrop-blur-sm cursor-pointer"
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        onPointerDown={stopPropagation}
+        whileTap={{ scale: 0.9 }}
+      >
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={isOpen ? "close" : "menu"}
+            initial={{ rotate: -90, opacity: 0 }}
+            animate={{ rotate: 0, opacity: 1 }}
+            exit={{ rotate: 90, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            {isOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+          </motion.div>
+        </AnimatePresence>
+      </motion.div>
+    </div>
+  );
+};
 
 interface StreamViewProps {
   device: DeviceInfo
@@ -78,7 +264,8 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [fullscreen, setFullscreen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const [mouseMode, setMouseMode] = useState(true)
-  const [useInterception, setUseInterception] = useState(true)
+  // Window mode defaults to API click (no interception), Screen mode defaults to interception
+  const [useInterception, setUseInterception] = useState(mode !== 'window')
   const [showUnlockDialog, setShowUnlockDialog] = useState(false)
   const [isLocked, setIsLocked] = useState(false)
   const [hasInterception, setHasInterception] = useState<boolean | null>(null)
@@ -90,8 +277,9 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     }
   }, [hasInterception]);
   const [keyboardMode, setKeyboardMode] = useState(true)
-  const [quality, setQuality] = useState([50])
-  const [streamScale, setStreamScale] = useState([0.8])
+  const [targetFps, setTargetFps] = useState([30])
+  const [quality, setQuality] = useState([80])
+  const [streamScale, setStreamScale] = useState([0.7])
   const [compress, setCompress] = useState(true)
   const [useWebP, setUseWebP] = useState(true)
   const [fps, setFps] = useState(0)
@@ -108,6 +296,21 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 })
   const [originalSize, setOriginalSize] = useState<{ width: number, height: number } | null>(null)
   
+  const [isLandscape, setIsLandscape] = useState(false)
+  
+  // 横屏和全屏模式互斥逻辑：横屏不支持全屏，全屏不支持横屏
+  useEffect(() => {
+    if (isLandscape && fullscreen) {
+      setFullscreen(false)
+    }
+  }, [isLandscape, fullscreen])
+
+  useEffect(() => {
+    if (fullscreen && isLandscape) {
+      setIsLandscape(false)
+    }
+  }, [fullscreen, isLandscape])
+
   const [showTextInput, setShowTextInput] = useState(false)
   const hiddenInputRef = useRef<HTMLInputElement>(null)
   const [realtimeSyncValue, setRealtimeSyncValue] = useState(" ")
@@ -149,6 +352,20 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [uploadProgress, setUploadProgress] = useState<{ [transferId: string]: number }>({})
   const [activeUploads, setActiveUploads] = useState<{ id: string, filename: string }[]>([])
   const cancelledUploads = useRef<Set<string>>(new Set())
+
+  // Keymap state
+  const [isEditingKeymap, setIsEditingKeymap] = useState(false)
+  const [keymapConfig, setKeymapConfig] = useState<any>(null)
+  const { configs: savedKeymaps, saveConfig: saveKeymapToStore, deleteConfig: deleteKeymapFromStore, exportConfig, importConfig } = useKeymapStore()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isDraggingNode, setIsDraggingNode] = useState(false)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [showKeymapProperties, setShowKeymapProperties] = useState(false)
+  const [executingNodeId, setExecutingNodeId] = useState<string | null>(null)
+
+  const crosshairNode = useMemo(() => {
+    return keymapConfig?.nodes?.find((n: any) => n.type === 'crosshair');
+  }, [keymapConfig]);
   
   // WebRTC Setup
   useEffect(() => {
@@ -193,6 +410,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
 
         dc.onopen = () => {
           console.log("[WebRTC] DataChannel opened");
+          dc.binaryType = 'arraybuffer';
           setWebrtcState("connected");
           setReconnectCount(0); // Reset retry count on successful connection
         };
@@ -209,10 +427,8 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
 
         // Handle incoming messages from DataChannel
         dc.onmessage = async (event) => {
-          console.log("[WebRTC] DataChannel onmessage received, data type:", typeof event.data, "size:", event.data.size || event.data.byteLength);
           try {
             if (typeof event.data === 'string') {
-                console.log("[WebRTC] Received string message:", event.data.substring(0, 50));
                 try {
                     const parsed = JSON.parse(event.data);
                     // Add deviceId if missing, as it's coming from this specific device
@@ -225,9 +441,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
                 // Binary data from Python client
                 // The Python client sends: [msg_type] + [metadata_len] + [metadata_bytes] + [frame_data]
                 // Note: It does NOT inject id_len and device_id like the server does.
-                const arrayBuffer = event.data instanceof Blob ? await event.data.arrayBuffer() : event.data;
-                const uint8Array = new Uint8Array(arrayBuffer);
-                console.log("[WebRTC] Received binary message, length:", uint8Array.length, "first byte:", uint8Array[0]);
+                const uint8Array = new Uint8Array(event.data);
                 
                 if (uint8Array.length > 0) {
                     const msg_type = uint8Array[0];
@@ -430,6 +644,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [isDraggingVMouse, setIsDraggingVMouse] = useState(false)
   const vMouseDragOffset = useRef({ x: 0, y: 0 })
   const [isMobile, setIsMobile] = useState(false)
+  const [isActualMobile, setIsActualMobile] = useState(false)
   const [showClockScroll, setShowClockScroll] = useState(false)
   const [clockScrollCenter, setClockScrollCenter] = useState({ x: 0, y: 0 })
   const [scrollAngle, setScrollAngle] = useState<number | null>(null)
@@ -535,7 +750,8 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     const panLoop = () => {
       if (!containerRef.current) return;
       
-      const containerRect = containerRef.current.getBoundingClientRect();
+      const containerWidth = containerRef.current.clientWidth;
+      const containerHeight = containerRef.current.clientHeight;
       const edgeThreshold = 60; // 60px from edge
       const maxSpeed = 6; // slow pan
       
@@ -549,15 +765,15 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
       
       if (x < edgeThreshold) {
         vx = ((edgeThreshold - x) / edgeThreshold) * maxSpeed;
-      } else if (x + vMouseWidth > containerRect.width - edgeThreshold) {
-        const dist = (x + vMouseWidth) - (containerRect.width - edgeThreshold);
+      } else if (x + vMouseWidth > containerWidth - edgeThreshold) {
+        const dist = (x + vMouseWidth) - (containerWidth - edgeThreshold);
         vx = -(Math.min(dist, edgeThreshold) / edgeThreshold) * maxSpeed;
       }
       
       if (y < edgeThreshold) {
         vy = ((edgeThreshold - y) / edgeThreshold) * maxSpeed;
-      } else if (y + vMouseHeight > containerRect.height - edgeThreshold) {
-        const dist = (y + vMouseHeight) - (containerRect.height - edgeThreshold);
+      } else if (y + vMouseHeight > containerHeight - edgeThreshold) {
+        const dist = (y + vMouseHeight) - (containerHeight - edgeThreshold);
         vy = -(Math.min(dist, edgeThreshold) / edgeThreshold) * maxSpeed;
       }
       
@@ -590,6 +806,7 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
       const isMobileUserAgent = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
       const mobile = isTouch || isSmallScreen || isMobileUserAgent;
       setIsMobile(mobile);
+      setIsActualMobile(isMobileUserAgent);
       
       if (mobile && !initialModeSet.current) {
         setInteractionMode("touch");
@@ -604,35 +821,53 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
 
   const getRealPos = useCallback((vMouseX: number, vMouseY: number) => {
     if (!canvasRef.current || !containerRef.current) return { x: 0, y: 0 };
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const cursorClientX = containerRect.left + vMouseX;
-    const cursorClientY = containerRect.top + vMouseY;
     
-    const rect = canvasRef.current.getBoundingClientRect();
+    const containerWidth = containerRef.current.clientWidth;
+    const containerHeight = containerRef.current.clientHeight;
+    
+    const canvasWidth = canvasRef.current.offsetWidth;
+    const canvasHeight = canvasRef.current.offsetHeight;
+    
+    const canvasLeft = containerWidth / 2 + scrollOffset.x - (canvasWidth * zoom) / 2;
+    const canvasTop = containerHeight / 2 + scrollOffset.y - (canvasHeight * zoom) / 2;
+    
+    const localX = vMouseX - canvasLeft;
+    const localY = vMouseY - canvasTop;
+    
+    const canvasX = localX / zoom;
+    const canvasY = localY / zoom;
+    
     const targetWidth = originalSize?.width || canvasRef.current.width;
     const targetHeight = originalSize?.height || canvasRef.current.height;
     
-    const canvasX = cursorClientX - rect.left;
-    const canvasY = cursorClientY - rect.top;
-    
-    let realX = Math.round((canvasX / rect.width) * targetWidth);
-    let realY = Math.round((canvasY / rect.height) * targetHeight);
+    let realX = Math.round((canvasX / canvasWidth) * targetWidth);
+    let realY = Math.round((canvasY / canvasHeight) * targetHeight);
     
     realX = Math.max(0, Math.min(targetWidth, realX));
     realY = Math.max(0, Math.min(targetHeight, realY));
     
     return { x: realX, y: realY };
-  }, [originalSize]);
+  }, [originalSize, scrollOffset, zoom]);
 
   const getVirtualMouseHotspot = useCallback(() => {
     // The visual tip of the MousePointer2 icon is slightly offset from the top-left
     // due to the SVG viewBox, w-8 h-8 sizing, and scale-75 transform.
     // We add an offset so the actual click matches the visual tip.
+    if (isLandscape) {
+      // In landscape mode, the UI is rotated 90deg CW. 
+      // The cursor icon is rotated 90deg CW inside the virtual mouse container
+      // to point towards the user's top-left (phone's bottom-left).
+      // The tip of the icon moves from top-left (3, 4) to bottom-left (4, 29).
+      return {
+        x: virtualMousePos.x ,
+        y: virtualMousePos.y + 3
+      };
+    }
     return {
       x: virtualMousePos.x + 3,
       y: virtualMousePos.y + 4
     };
-  }, [virtualMousePos]);
+  }, [virtualMousePos, isLandscape]);
 
   useEffect(() => {
     if (showVirtualMouse && canvasRef.current && containerRef.current) {
@@ -686,15 +921,24 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     if (!rect) return;
 
     // Calculate relative coordinates on the canvas
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    let x = e.clientX - rect.left;
+    let y = e.clientY - rect.top;
+    let rectW = rect.width;
+    let rectH = rect.height;
+
+    if (isLandscape) {
+      x = e.clientY - rect.top;
+      y = rect.right - e.clientX;
+      rectW = rect.height;
+      rectH = rect.width;
+    }
 
     // Scale to remote screen coordinates
     const targetWidth = originalSize?.width || canvasRef.current!.width;
     const targetHeight = originalSize?.height || canvasRef.current!.height;
 
-    const realX = Math.round((x / rect.width) * targetWidth);
-    const realY = Math.round((y / rect.height) * targetHeight);
+    const realX = Math.round((x / rectW) * targetWidth);
+    const realY = Math.round((y / rectH) * targetHeight);
 
     const CHUNK_SIZE = 128 * 1024; // 128KB chunks
 
@@ -771,19 +1015,27 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const brightnessCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const lastFrameTimeRef = useRef<number>(0)
   const frameCountRef = useRef<number>(0)
   const lastFpsTimeRef = useRef<number>(Date.now())
   const lastMouseMoveTimeRef = useRef<number>(0)
 
-  // Initialize offscreen canvas
+  // Initialize canvases
   useEffect(() => {
     if (!offscreenCanvasRef.current) {
         offscreenCanvasRef.current = document.createElement('canvas')
     }
+    if (!brightnessCanvasRef.current) {
+        brightnessCanvasRef.current = document.createElement('canvas')
+        brightnessCanvasRef.current.width = 100
+        brightnessCanvasRef.current.height = 100
+    }
   }, [])
 
   const metadataRef = useRef<any>(null)
+  const lastFrameTsRef = useRef<number>(0)
+  const lastProcessedTsRef = useRef<number>(0)
   const lastHandledMessageRef = useRef<any>(null)
   const lastHandledRtcMessageRef = useRef<any>(null)
   
@@ -820,351 +1072,332 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     return () => socket.removeEventListener('message', handleSignalingMessage);
   }, [socket, device.id]);
 
-  // Handle incoming frames
-  useEffect(() => {
-    const processMessage = (msg: any, ref: React.MutableRefObject<any>) => {
-        if (!msg) return;
-        console.log(`[StreamView] processMessage called, type: ${msg.type}, deviceId: ${msg.deviceId}, binary: ${msg.isBinary}`);
-        
-        if (msg === ref.current) return;
-        ref.current = msg;
+  // Process incoming messages (stable function to avoid React batching issues)
+  const handleIncomingMessage = useCallback((msg: any) => {
+    if (!msg || msg.deviceId !== device.id) return;
 
-        if (msg.deviceId === device.id) {
-            if (msg.type === 'screen_metadata' || msg.type === 'window_metadata') {
-                metadataRef.current = msg;
-                if (msg.cursor_style) {
-                    setCursorStyle(msg.cursor_style);
+    // Handle frame messages
+    const isScreenFrame = mode === 'screen' && (msg.type === 'screen_frame');
+    const isWindowFrame = mode === 'window' && (msg.type === 'window_frame' || msg.type === 'screen_frame');
+
+    if (isScreenFrame || isWindowFrame) {
+        const metadata = msg.metadata || {};
+        
+        // 检查时间戳，防止画面倒退（网络乱序）
+        if (metadata.ts) {
+            if (metadata.ts < lastFrameTsRef.current) {
+                // 如果收到的帧比已处理的帧还要旧，且不是因为时间戳重置（差距巨大），则丢弃
+                if (lastFrameTsRef.current - metadata.ts < 5) {
+                    return;
                 }
-                if (msg.is_locked !== undefined) {
-                    setIsLocked(!!msg.is_locked);
-                }
-                if (msg.has_interception !== undefined) {
-                    setHasInterception(!!msg.has_interception);
-                }
+            }
+            lastFrameTsRef.current = metadata.ts;
+        }
+
+        if (metadata.cursor_style && metadata.cursor_style !== cursorStyle) setCursorStyle(metadata.cursor_style);
+        if (metadata.is_locked !== undefined && !!metadata.is_locked !== isLocked) setIsLocked(!!metadata.is_locked);
+        if (metadata.has_interception !== undefined && !!metadata.has_interception !== hasInterception) setHasInterception(!!metadata.has_interception);
+
+        const mimeType = metadata.format === 'webp' ? 'image/webp' : 'image/jpeg';
+        let url: string;
+        if (msg.isBinary) {
+            const blob = new Blob([msg.data], { type: mimeType });
+            url = URL.createObjectURL(blob);
+        } else {
+            url = `data:${mimeType};base64,${msg.data}`;
+        }
+        
+        const img = new Image()
+        const frameTs = metadata.ts || 0;
+        img.onload = () => {
+            // Check again if a newer frame has already been processed
+            if (frameTs && frameTs < lastProcessedTsRef.current) {
+                if (msg.isBinary) URL.revokeObjectURL(url);
                 return;
             }
+            if (frameTs) lastProcessedTsRef.current = frameTs;
 
-            const isScreenFrame = mode === 'screen' && (msg.type === 'screen_frame');
-            const isWindowFrame = mode === 'window' && (msg.type === 'window_frame' || msg.type === 'screen_frame');
+            const offscreen = offscreenCanvasRef.current
+            const canvas = canvasRef.current
+            if (!offscreen || !canvas) {
+                if (msg.isBinary) URL.revokeObjectURL(url);
+                return
+            }
 
-            if (isScreenFrame || isWindowFrame) {
-                const metadata = msg.metadata || {};
-                
-                if (metadata.cursor_style) {
-                    setCursorStyle(metadata.cursor_style);
+            // Reuse brightness canvas
+            const bCanvas = brightnessCanvasRef.current;
+            if (bCanvas) {
+                const bCtx = bCanvas.getContext('2d');
+                if (bCtx) {
+                    bCtx.drawImage(img, 0, 0, 100, 100);
+                    const imageData = bCtx.getImageData(0, 0, 100, 100);
+                    let brightness = 0;
+                    for (let i = 0; i < imageData.data.length; i += 4) {
+                        brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
+                    }
+                    brightness /= (imageData.data.length / 4);
+                    
+                    if (brightness < 10) {
+                        if (msg.isBinary) URL.revokeObjectURL(url);
+                        return;
+                    }
                 }
-                if (metadata.is_locked !== undefined) {
-                    setIsLocked(!!metadata.is_locked);
-                }
-                if (metadata.has_interception !== undefined) {
-                    setHasInterception(!!metadata.has_interception);
-                }
+            }
 
-                const mimeType = metadata.format === 'webp' ? 'image/webp' : 'image/jpeg';
-                
-                let url: string;
-                if (msg.isBinary) {
-                    const blob = new Blob([msg.data], { type: mimeType });
-                    url = URL.createObjectURL(blob);
+            if (!imageSrc) setImageSrc(url); 
+            const ctx = canvas.getContext('2d')
+            const offCtx = offscreen.getContext('2d')
+            if (ctx && offCtx) {
+                const isFull = metadata.full !== false
+                const x = metadata.x || 0
+                const y = metadata.y || 0
+                const totalWidth = metadata.total_width || metadata.width || img.width
+                const totalHeight = metadata.total_height || metadata.height || img.height
+
+                if (isFull) {
+                    if (offscreen.width !== totalWidth || offscreen.height !== totalHeight) {
+                        offscreen.width = totalWidth
+                        offscreen.height = totalHeight
+                        setOriginalSize({ 
+                            width: metadata.original_width || totalWidth, 
+                            height: metadata.original_height || totalHeight 
+                        })
+                    }
+                    offCtx.drawImage(img, 0, 0)
                 } else {
-                    url = `data:${mimeType};base64,${msg.data}`;
+                    offCtx.drawImage(img, x, y)
                 }
-                
-                const img = new Image()
-                img.onload = () => {
-                    // Check if the frame is all black (privacy screen)
-                    const offscreen = offscreenCanvasRef.current
-                    const canvas = canvasRef.current
-                    if (!offscreen || !canvas) {
-                        if (msg.isBinary) URL.revokeObjectURL(url);
-                        return
-                    }
 
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = 100;
-                    tempCanvas.height = 100;
-                    const tempCtx = tempCanvas.getContext('2d');
-                    if (tempCtx) {
-                        tempCtx.drawImage(img, 0, 0, 100, 100);
-                        const imageData = tempCtx.getImageData(0, 0, 100, 100);
-                        let brightness = 0;
-                        for (let i = 0; i < imageData.data.length; i += 4) {
-                            brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
-                        }
-                        brightness /= (imageData.data.length / 4);
-                        
-                        if (brightness < 10) {
-                            console.log('[StreamView] Privacy screen detected, skipping frame');
-                            if (msg.isBinary) URL.revokeObjectURL(url);
-                            return;
-                        }
-                    }
+                if (canvas.width !== offscreen.width || canvas.height !== offscreen.height) {
+                    canvas.width = offscreen.width
+                    canvas.height = offscreen.height
+                }
+                ctx.drawImage(offscreen, 0, 0)
+            }
+            if (msg.isBinary) URL.revokeObjectURL(url);
+        }
+        img.onerror = () => {
+            if (msg.isBinary) URL.revokeObjectURL(url);
+            const command = mode === 'screen' ? 'screen' : 'window_stream'
+            sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
+        }
+        img.src = url;
+        
+        frameCountRef.current++
+        const now = Date.now()
+        if (now - lastFpsTimeRef.current >= 1000) {
+            setFps(frameCountRef.current)
+            frameCountRef.current = 0
+            lastFpsTimeRef.current = now
+        }
+        return;
+    }
 
-                    setImageSrc(url); // Update imageSrc to hide loading
-                    
-                    const ctx = canvas.getContext('2d')
-                    const offCtx = offscreen.getContext('2d')
-                    if (!ctx || !offCtx) {
-                        if (msg.isBinary) URL.revokeObjectURL(url);
-                        return
-                    }
+    // Handle metadata messages
+    if (msg.type === 'screen_metadata' || msg.type === 'window_metadata') {
+        metadataRef.current = msg;
+        if (msg.cursor_style) setCursorStyle(msg.cursor_style);
+        if (msg.is_locked !== undefined) setIsLocked(!!msg.is_locked);
+        if (msg.has_interception !== undefined) setHasInterception(!!msg.has_interception);
+        return;
+    }
 
-                    // Handle full frame or incremental update
-                    const isFull = metadata.full !== false // Default to true if undefined
-                    const x = metadata.x || 0
-                    const y = metadata.y || 0
-                    const totalWidth = metadata.total_width || metadata.width || img.width
-                    const totalHeight = metadata.total_height || metadata.height || img.height
-
-                    if (isFull) {
-                        // Resize offscreen canvas if needed
-                        if (offscreen.width !== totalWidth || offscreen.height !== totalHeight) {
-                            offscreen.width = totalWidth
-                            offscreen.height = totalHeight
-                            setOriginalSize({ 
-                                width: metadata.original_width || totalWidth, 
-                                height: metadata.original_height || totalHeight 
-                            })
-                        }
-                        // Draw full frame to offscreen
-                        offCtx.drawImage(img, 0, 0)
-                    } else {
-                        // Draw chunk to offscreen
-                        offCtx.drawImage(img, x, y)
+    // Handle other messages
+    if (msg.type === 'performance' || msg.type === 'performance_metrics') {
+        if (showPerformance) {
+            const now = Date.now()
+            if (prevPerformanceRef.current) {
+              const timeDiff = (now - prevTimeRef.current) / 1000
+              if (timeDiff > 0) {
+                setPerformanceSpeed({
+                  net_sent_speed: Math.max(0, (msg.data.net_sent - prevPerformanceRef.current.net_sent) / timeDiff),
+                  net_recv_speed: Math.max(0, (msg.data.net_recv - prevPerformanceRef.current.net_recv) / timeDiff),
+                })
+              }
+            }
+            prevPerformanceRef.current = msg.data
+            prevTimeRef.current = now
+            setPerformance(msg.data)
+        }
+    } else if (msg.type === 'pong') {
+        if (webrtcState !== 'connected' && lastPingTimeRef.current) {
+          const rtt = Date.now() - lastPingTimeRef.current;
+          setLatency(rtt);
+          lastPingTimeRef.current = null;
+        } 
+    } else if (msg.type === 'notification') {
+        notify({ title: msg.data.title || "通知", message: msg.data.message || "", type: "info" });
+    } else if (msg.type === 'file_progress') {
+        const { transferId, progress } = msg.data;
+        setUploadProgress(prev => ({ ...prev, [transferId]: progress }));
+    } else if (msg.type === 'file_complete') {
+        const { transferId, filename } = msg.data;
+        setActiveUploads(prev => prev.filter(f => f.id !== transferId));
+        setUploadProgress(prev => {
+            const next = { ...prev };
+            delete next[transferId];
+            return next;
+        });
+        notify({ title: "传输完成", message: `文件 ${filename || '传输'} 已成功送达`, type: "success" });
+    } else if (msg.type === 'file_cancel') {
+        const { transferId, filename } = msg.data;
+        cancelledUploads.current.add(transferId);
+        setActiveUploads(prev => prev.filter(f => f.id !== transferId));
+        setUploadProgress(prev => {
+            const next = { ...prev };
+            delete next[transferId];
+            return next;
+        });
+        notify({ title: "传输已取消", message: filename ? `文件 ${filename} 的传输已被取消` : "远程设备取消了文件传输", type: "error" });
+    } else if (msg.type === 'error') {
+        if (msg.deviceId === device.id && msg.message === 'Invalid device password') {
+            if (onBack) onBack();
+        }
+    } else if (msg.type === 'session_invalidated') {
+        if (msg.deviceId === device.id && onBack) onBack();
+    } else if (msg.type === 'screenshot') {
+        const url = `data:image/jpeg;base64,${msg.data}`;
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `screenshot-${device.id}-${Date.now()}.jpg`;
+        link.click();
+        notify({ title: "截图成功", message: "截图已保存到您的下载文件夹", type: "success" });
+    } else if (msg.type === 'clipboard') {
+        const text = msg.data;
+        const isAuto = msg.auto === true;
+        
+        navigator.clipboard.writeText(text).then(() => {
+            if (!isAuto) {
+                notify({ title: "剪贴板同步成功", message: "已从远程设备获取剪贴板内容", type: "success" });
+            }
+        }).catch(err => {
+            console.error("Clipboard sync error:", err);
+            // Don't notify on auto-sync failure as it might be due to browser security (no user gesture)
+            if (!isAuto) {
+                notify({ title: "剪贴板同步失败", message: "无法写入本地剪贴板，请检查浏览器权限", type: "error" });
+            }
+        });
+    } else if (msg.type === 'clipboard_image') {
+        const base64Data = msg.data;
+        const isAuto = msg.auto === true;
+        
+        try {
+            // Convert base64 to blob
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: 'image/png' });
+            
+            // Try to write to clipboard
+            if (navigator.clipboard && (window as any).ClipboardItem) {
+                const item = new (window as any).ClipboardItem({ [blob.type]: blob });
+                navigator.clipboard.write([item]).then(() => {
+                    if (!isAuto) {
+                        notify({ title: "剪贴板同步成功", message: "已从远程设备获取图片内容", type: "success" });
                     }
-
-                    // Update visible canvas
-                    if (canvas.width !== offscreen.width || canvas.height !== offscreen.height) {
-                        canvas.width = offscreen.width
-                        canvas.height = offscreen.height
-                    }
-                    ctx.drawImage(offscreen, 0, 0)
-                    
-                    if (msg.isBinary) URL.revokeObjectURL(url);
-                }
-                img.onerror = (e) => {
-                    console.error('[StreamView] Image load error:', e);
-                    if (msg.isBinary) URL.revokeObjectURL(url);
-                    // Auto-refresh on stream error
-                    const command = mode === 'screen' ? 'screen' : 'window_stream'
-                    sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
-                }
-                img.src = url;
-                
-                // Calculate FPS
-                frameCountRef.current++
-                const now = Date.now()
-                if (now - lastFpsTimeRef.current >= 1000) {
-                    setFps(frameCountRef.current)
-                    frameCountRef.current = 0
-                    lastFpsTimeRef.current = now
-                }
-            } else if (msg.type === 'error') {
-                if (msg.deviceId === device.id && msg.message === 'Invalid device password') {
-                    if (onBack) onBack();
-                }
-            } else if (msg.type === 'session_invalidated') {
-                if (msg.deviceId === device.id) {
-                    // Handled globally in WebSocketProvider
-                    if (onBack) onBack()
-                }
-            } else if (msg.type === 'viewer_count') {
-                if (msg.deviceId === device.id && msg.count === 0) {
-                    // No more viewers, maybe close?
-                    // The user said "客户端也提示还有一个控制"
-                }
-            } else if (msg.type === 'screenshot') {
-                const url = `data:image/jpeg;base64,${msg.data}`;
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `screenshot-${device.id}-${Date.now()}.jpg`;
-                link.click();
-                notify({
-                    title: "截图成功",
-                    message: "截图已保存到您的下载文件夹",
-                    type: "success"
-                });
-            } else if (msg.type === 'clipboard') {
-                const text = msg.data;
-                navigator.clipboard.writeText(text).then(() => {
-                    notify({
-                        title: "剪贴板同步成功",
-                        message: "已从远程设备获取剪贴板内容",
-                        type: "success"
-                    });
                 }).catch(err => {
-                    console.error('Failed to copy: ', err);
-                    notify({
-                        title: "剪贴板同步失败",
-                        message: "无法写入本地剪贴板",
-                        type: "error"
-                    });
-                });
-            } else if (msg.type === 'audio_opus' && listenAudio) {
-                // Handle incoming Opus audio
-                if (!audioContextRef.current) {
-                    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-                    nextPlayTimeRef.current = audioContextRef.current.currentTime;
-                }
-                
-                if (!opusDecoderRef.current) {
-                    opusDecoderRef.current = new OpusDecoder();
-                    opusDecoderRef.current.ready.then(() => {
-                        console.log("Opus Decoder ready");
-                        setOpusReady(true);
-                    });
-                }
-
-                if (!opusReady) return;
-
-                const ctx = audioContextRef.current;
-                if (ctx.state === 'suspended') {
-                    ctx.resume();
-                }
-                
-                setIsReceivingAudio(true);
-                if (audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current);
-                audioTimeoutRef.current = setTimeout(() => setIsReceivingAudio(false), 500);
-                
-                try {
-                    const opusData = msg.data; // Uint8Array
-                    
-                    // Decode Opus packet
-                    const { channelData, samplesDecoded, sampleRate } = opusDecoderRef.current.decodeFrame(opusData);
-                    
-                    if (samplesDecoded > 0) {
-                        const float32Data = channelData[0]; // Mono
-                        
-                        const audioBuffer = ctx.createBuffer(1, float32Data.length, sampleRate);
-                        audioBuffer.getChannelData(0).set(float32Data);
-                        
-                        const source = ctx.createBufferSource();
-                        source.buffer = audioBuffer;
-                        source.connect(ctx.destination);
-                        
-                        const currentTime = ctx.currentTime;
-                        if (nextPlayTimeRef.current < currentTime) {
-                            nextPlayTimeRef.current = currentTime;
-                        }
-                        source.start(nextPlayTimeRef.current);
-                        nextPlayTimeRef.current += audioBuffer.duration;
+                    console.error("Image clipboard sync error:", err);
+                    if (!isAuto) {
+                        notify({ title: "剪贴板同步失败", message: "无法写入图片到剪贴板", type: "error" });
                     }
-                } catch (e) {
-                    console.error("Opus audio playback error:", e);
-                }
-            } else if (msg.type === 'audio_data' && listenAudio) {
-                // ... (existing audio handling)
-                // Handle incoming audio
-                if (!audioContextRef.current) {
-                    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-                    nextPlayTimeRef.current = audioContextRef.current.currentTime;
-                }
-                
-                const ctx = audioContextRef.current;
-                if (ctx.state === 'suspended') {
-                    ctx.resume();
-                }
-                
-                setIsReceivingAudio(true);
-                if (audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current);
-                audioTimeoutRef.current = setTimeout(() => setIsReceivingAudio(false), 500);
-                
-                try {
-                    const bytes = msg.data; // Uint8Array
-                    // Ensure the buffer is aligned for Int16Array (offset must be multiple of 2)
-                    let int16Data: Int16Array;
-                    if (bytes.byteOffset % 2 === 0) {
-                        int16Data = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
-                    } else {
-                        // Copy to a new aligned buffer if necessary
-                        const alignedBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-                        int16Data = new Int16Array(alignedBuffer);
-                    }
-                    
-                    const float32Data = new Float32Array(int16Data.length);
-                    for (let i = 0; i < int16Data.length; i++) {
-                        float32Data[i] = int16Data[i] / 32768.0;
-                    }
-                    
-                    const audioBuffer = ctx.createBuffer(1, float32Data.length, 16000);
-                    audioBuffer.getChannelData(0).set(float32Data);
-                    
-                    const source = ctx.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(ctx.destination);
-                    
-                    const currentTime = ctx.currentTime;
-                    if (nextPlayTimeRef.current < currentTime) {
-                        nextPlayTimeRef.current = currentTime;
-                    }
-                    source.start(nextPlayTimeRef.current);
-                    nextPlayTimeRef.current += audioBuffer.duration;
-                } catch (e) {
-                    console.error("Audio playback error:", e);
-                }
-            } else if (msg.type === 'performance_metrics' && showPerformance) {
-                const now = Date.now()
-                if (prevPerformanceRef.current && prevTimeRef.current) {
-                  const timeDiff = (now - prevTimeRef.current) / 1000 // in seconds
-                  if (timeDiff > 0) {
-                    setPerformanceSpeed({
-                      net_sent_speed: Math.max(0, (msg.data.net_sent - prevPerformanceRef.current.net_sent) / timeDiff),
-                      net_recv_speed: Math.max(0, (msg.data.net_recv - prevPerformanceRef.current.net_recv) / timeDiff),
-                    })
-                  }
-                }
-                prevPerformanceRef.current = msg.data
-                prevTimeRef.current = now
-                setPerformance(msg.data)
-            } else if (msg.type === 'pong') {
-                if (webrtcState !== 'connected' && lastPingTimeRef.current) {
-                  const rtt = Date.now() - lastPingTimeRef.current;
-                  setLatency(rtt);
-                  lastPingTimeRef.current = null;
-                } 
-            } else if (msg.type === 'notification') {
-                notify({
-                    title: msg.data.title || "通知",
-                    message: msg.data.message || "",
-                    type: "info"
-                });
-            } else if (msg.type === 'file_progress') {
-                const { transferId, progress } = msg.data;
-                setUploadProgress(prev => ({ ...prev, [transferId]: progress }));
-            } else if (msg.type === 'file_complete') {
-                const { transferId, filename } = msg.data;
-                setActiveUploads(prev => prev.filter(f => f.id !== transferId));
-                setUploadProgress(prev => {
-                    const next = { ...prev };
-                    delete next[transferId];
-                    return next;
-                });
-                notify({
-                    title: "传输完成",
-                    message: `文件 ${filename || '传输'} 已成功送达`,
-                    type: "success"
-                });
-            } else if (msg.type === 'file_cancel') {
-                const { transferId, filename } = msg.data;
-                cancelledUploads.current.add(transferId);
-                setActiveUploads(prev => prev.filter(f => f.id !== transferId));
-                setUploadProgress(prev => {
-                    const next = { ...prev };
-                    delete next[transferId];
-                    return next;
-                });
-                notify({
-                    title: "传输已取消",
-                    message: filename ? `文件 ${filename} 的传输已被取消` : "远程设备取消了文件传输",
-                    type: "error"
                 });
             }
+        } catch (e) {
+            console.error("Image processing error:", e);
         }
-    };
+    } else if (msg.type === 'audio_opus' && listenAudio) {
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            nextPlayTimeRef.current = audioContextRef.current.currentTime;
+        }
+        
+        if (!opusDecoderRef.current) {
+            opusDecoderRef.current = new OpusDecoder();
+            opusDecoderRef.current.ready.then(() => {
+                setOpusReady(true);
+            });
+        }
 
-    processMessage(lastMessage, lastHandledMessageRef);
-    processMessage(rtcMessage, lastHandledRtcMessageRef);
-  }, [lastMessage, rtcMessage, device.id, mode, listenAudio, showPerformance, notify, onBack, sendCommand, targetId])
+        if (!opusReady) return;
+
+        const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') ctx.resume();
+        
+        setIsReceivingAudio(true);
+        if (audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current);
+        audioTimeoutRef.current = setTimeout(() => setIsReceivingAudio(false), 500);
+        
+        try {
+            const { channelData, samplesDecoded, sampleRate } = opusDecoderRef.current.decodeFrame(msg.data);
+            if (samplesDecoded > 0) {
+                const float32Data = channelData[0];
+                const audioBuffer = ctx.createBuffer(1, float32Data.length, sampleRate);
+                audioBuffer.getChannelData(0).set(float32Data);
+                const source = ctx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(ctx.destination);
+                const currentTime = ctx.currentTime;
+                // 增加一个小缓冲区（150ms）来应对网络抖动，减少音频断点
+                const audioBufferDelay = 0.15;
+                if (nextPlayTimeRef.current < currentTime + audioBufferDelay) {
+                    nextPlayTimeRef.current = currentTime + audioBufferDelay;
+                }
+                source.start(nextPlayTimeRef.current);
+                nextPlayTimeRef.current += audioBuffer.duration;
+            }
+        } catch (e) {
+            console.error("Opus decode error", e);
+        }
+    } else if (msg.type === 'audio_data' && listenAudio) {
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+            nextPlayTimeRef.current = audioContextRef.current.currentTime;
+        }
+        const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') ctx.resume();
+        setIsReceivingAudio(true);
+        if (audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current);
+        audioTimeoutRef.current = setTimeout(() => setIsReceivingAudio(false), 500);
+        try {
+            const bytes = msg.data;
+            let int16Data: Int16Array;
+            if (bytes.byteOffset % 2 === 0) {
+                int16Data = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+            } else {
+                int16Data = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+            }
+            const float32Data = new Float32Array(int16Data.length);
+            for (let i = 0; i < int16Data.length; i++) float32Data[i] = int16Data[i] / 32768.0;
+            const audioBuffer = ctx.createBuffer(1, float32Data.length, 16000);
+            audioBuffer.getChannelData(0).set(float32Data);
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(ctx.destination);
+            const currentTime = ctx.currentTime;
+            // 增加一个小缓冲区（150ms）来应对网络抖动，减少音频断点
+            const audioBufferDelay = 0.15;
+            if (nextPlayTimeRef.current < currentTime + audioBufferDelay) {
+                nextPlayTimeRef.current = currentTime + audioBufferDelay;
+            }
+            source.start(nextPlayTimeRef.current);
+            nextPlayTimeRef.current += audioBuffer.duration;
+        } catch (e) {
+            console.error("Audio playback error:", e);
+        }
+    }
+  }, [device.id, mode, listenAudio, showPerformance, notify, onBack, sendCommand, targetId, webrtcState, opusReady]);
+
+  // Handle incoming messages
+  useEffect(() => {
+    handleIncomingMessage(lastMessage);
+  }, [lastMessage, handleIncomingMessage]);
+
+  useEffect(() => {
+    handleIncomingMessage(rtcMessage);
+  }, [rtcMessage, handleIncomingMessage]);
 
 // 
 useEffect(() => {
@@ -1283,6 +1516,19 @@ useEffect(() => {
     }
   }, [speakAudio, device.id, sendCommand, device.ip, notify]);
 
+  const sendRTCCommand = useCallback((command: string, args: any) => {
+      if (rtcDcRef.current?.readyState === 'open') {
+          rtcDcRef.current.send(JSON.stringify({ 
+              command, 
+              args,
+              deviceId: device.id,
+              password: device.password || ""
+          }));
+      } else {
+          sendCommand(device.id, device.password || "", command, args);
+      }
+  }, [device.id, device.password, sendCommand]);
+
   // Stream control loop
   useEffect(() => {
     const command = mode === 'screen' ? 'screen' : 'window_stream'
@@ -1291,20 +1537,21 @@ useEffect(() => {
         quality: quality[0], 
         scale: streamScale[0],
         compress: compress,
-        webp: useWebP
+        webp: useWebP,
+        fps: targetFps[0]
     }
     if (mode === 'window' && targetId) {
         args.id = targetId
     }
 
     const startStream = () => {
-        sendCommand(device.id, device.password || "", command, args);
+        sendRTCCommand(command, args);
         // Request initial full screen
-        sendCommand(device.id, device.password || "", command, { ...args, action: 'refresh' });
+        sendRTCCommand(command, { ...args, action: 'refresh' });
     }
 
     const stopStream = () => {
-        sendCommand(device.id, device.password || "", command, { action: 'stop', id: targetId });
+        sendRTCCommand(command, { action: 'stop', id: targetId });
     }
 
     startStream()
@@ -1342,20 +1589,7 @@ useEffect(() => {
             opusDecoderRef.current = null;
         }
     }
-  }, [device.id, device.password, quality, streamScale, compress, useWebP, sendCommand, mode, targetId])
-
-  const sendRTCCommand = useCallback((command: string, args: any) => {
-      if (rtcDcRef.current?.readyState === 'open') {
-          rtcDcRef.current.send(JSON.stringify({ 
-              command, 
-              args,
-              deviceId: device.id,
-              password: device.password || ""
-          }));
-      } else {
-          sendCommand(device.id, device.password || "", command, args);
-      }
-  }, [device.id, device.password, sendCommand]);
+  }, [device.id, device.password, quality, streamScale, compress, useWebP, sendCommand, mode, targetId, sendRTCCommand])
 
   const sendInput = (action: string, data: any) => {
       if (mode === 'screen') {
@@ -1392,21 +1626,188 @@ useEffect(() => {
     return map[key] || key.toLowerCase()
   }
 
-  interface ToolbarAction {
-    id?: string;
-    icon: any;
-    label: string;
-    active?: boolean;
-    onClick?: () => void;
-    dropdown?: { label: string; onClick: () => void; destructive?: boolean }[];
-    destructive?: boolean;
-    disabled?: boolean;
-    className?: string;
-    badge?: number | string;
-  }
+  const handleRefresh = useCallback(() => {
+    const command = mode === 'screen' ? 'screen' : 'window_stream'
+    sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
+    // Force WebRTC reconnect and re-fetch TURN config
+    setReconnectCount(0); // Reset retry count for manual refresh
+    setReconnectTrigger(prev => prev + 1);
+    notify({
+        title: "正在刷新",
+        message: "已重新请求画面并重连P2P",
+        type: "info"
+    });
+  }, [mode, device.id, device.password, targetId, sendCommand, notify]);
+
+  const handleImportKeymap = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      importConfig(file)
+        .then((config) => {
+          notify({ title: "导入成功", message: `已成功导入方案: ${config.name}`, type: "success" });
+          setKeymapConfig(config);
+        })
+        .catch((err) => {
+          notify({ title: "导入失败", message: "文件格式不正确或解析失败", type: "error" });
+        });
+    }
+    // Reset file input
+    if (e.target) e.target.value = '';
+  };
+
+  const handleKeymapAction = useCallback(async (node: any, action: 'down' | 'up' | 'move', extra?: any) => {
+    const targetX = node.targetX ?? node.x;
+    const targetY = node.targetY ?? node.y;
+
+    // Convert percentage to remote coordinates
+    const remoteX = Math.round((targetX / 100) * (originalSize?.width || 1920));
+    const remoteY = Math.round((targetY / 100) * (originalSize?.height || 1080));
+
+    const getMouseButton = (key: string) => {
+      if (key === 'LButton') return 'left';
+      if (key === 'RButton') return 'right';
+      if (key === 'MButton') return 'middle';
+      if (key?.startsWith('Mouse')) {
+        const btn = key.replace('Mouse', '').toLowerCase();
+        return btn === 'left' || btn === 'right' || btn === 'middle' ? btn : 'left';
+      }
+      return null;
+    };
+
+    // Helper to sleep
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    if (node.type === 'click' && action === 'down') {
+      const actions = node.actions || [{ type: 'click', key: node.key }];
+      
+      // Determine if this is a macro sequence or a simple single button
+      const isMacro = actions.length > 1 || (actions.length === 1 && actions[0].type === 'delay');
+      
+      if (isMacro) {
+        setExecutingNodeId(node.id);
+        
+        try {
+          for (const act of actions) {
+            if (act.type === 'delay' && act.delay) {
+              await sleep(act.delay);
+            } else if (act.type === 'click') {
+              const mouseBtn = getMouseButton(act.key || node.key);
+              // Use explicit coordinates if set, otherwise use the node's percentage-based position
+              const x = (act.x !== undefined && act.x !== null) ? act.x : remoteX;
+              const y = (act.y !== undefined && act.y !== null) ? act.y : remoteY;
+              
+              if (mouseBtn) {
+                sendInput('mousedown', { x, y, button: mouseBtn });
+                await sleep(20);
+                // Release at current position without moving to coordinates again
+                sendInput('mouseup', { button: mouseBtn });
+              } else if (act.key || node.key) {
+                sendInput('keypress', { key: (act.key || node.key).toLowerCase() });
+              }
+              await sleep(20);
+            }
+          }
+        } finally {
+          setExecutingNodeId(null);
+        }
+        return;
+      }
+    }
+
+    // For non-macro nodes or fallback
+    switch (node.type) {
+      case 'click':
+      case 'fire':
+      case 'skill':
+      case 'swipe':
+      case 'crosshair':
+        const firstAction = (node.type === 'click' && node.actions?.length === 1) ? node.actions[0] : null;
+        const currentKey = extra?.key || firstAction?.key || node.key;
+        const mouseBtn = getMouseButton(currentKey);
+        
+        // Use action coordinates if it's a simple click node, otherwise use remoteX/Y
+        const x = (firstAction && firstAction.x !== undefined && firstAction.x !== null) ? firstAction.x : remoteX;
+        const y = (firstAction && firstAction.y !== undefined && firstAction.y !== null) ? firstAction.y : remoteY;
+
+        if (action === 'down') {
+          if (mouseBtn) {
+            sendInput('mousedown', { x, y, button: mouseBtn });
+          } else if (currentKey) {
+            sendInput('keydown', { key: currentKey.toLowerCase() });
+          } else {
+            sendInput('mousedown', { x, y, button: 'left' });
+          }
+        } else if (action === 'up') {
+          if (mouseBtn) {
+            // Release directly at current position
+            sendInput('mouseup', { button: mouseBtn });
+          } else if (currentKey) {
+            sendInput('keyup', { key: currentKey.toLowerCase() });
+          } else {
+            sendInput('mouseup', { button: 'left' });
+          }
+        }
+        break;
+      case 'joystick':
+        if (action === 'down' || action === 'move') {
+          if (extra?.key) {
+             const jMouseBtn = getMouseButton(extra.key);
+             if (jMouseBtn) {
+               // If it's a mouse button on joystick, we should probably mousedown at the target location
+               sendInput('mousedown', { x: remoteX, y: remoteY, button: jMouseBtn });
+             } else {
+               sendInput('keydown', { key: extra.key.toLowerCase() });
+             }
+          }
+        } else if (action === 'up') {
+          if (extra?.key) {
+             const jMouseBtn = getMouseButton(extra.key);
+             if (jMouseBtn) {
+               // Release directly
+               sendInput('mouseup', { button: jMouseBtn });
+             } else {
+               sendInput('keyup', { key: extra.key.toLowerCase() });
+             }
+          }
+        }
+        break;
+    }
+  }, [originalSize, sendInput]);
 
   const toolbarActions: ToolbarAction[] = [
-    { icon: MousePointer2, label: "远程点击", active: mouseMode, onClick: () => setMouseMode(!mouseMode) },
+    ...(onBack ? [{
+      icon: ArrowLeft,
+      label: "返回",
+      onClick: onBack 
+    }] : []),
+    { 
+      icon: Smartphone, 
+      label: isLandscape ? "切换竖屏" : "切换横屏", 
+      active: isLandscape, 
+      onClick: () => {
+        const next = !isLandscape;
+        setIsLandscape(next);
+        if (next) setFullscreen(false);
+      },
+      className: cn("transition-transform duration-300", isLandscape ? "rotate-90" : "rotate-0") 
+    },
+    { 
+      icon: fullscreen ? Minimize2 : Maximize2, 
+      label: fullscreen ? "退出全屏" : "全屏", 
+      active: fullscreen, 
+      onClick: () => {
+        const next = !fullscreen;
+        setFullscreen(next);
+        if (next) setIsLandscape(false);
+      } 
+    },
+    {
+      icon: RotateCcw,
+      label: "刷新连接",
+      onClick: handleRefresh,
+      hideOnMobile: true
+    },
+    { icon: MousePointer2, label: "远程点击", active: mouseMode, onClick: () => setMouseMode(!mouseMode), hideOnMobile: true },
     { 
       icon: Gamepad2, 
       label: hasInterception === false ? "驱动级输入 (客户端未安装驱动)" : "驱动级输入", 
@@ -1426,14 +1827,72 @@ useEffect(() => {
       className: hasInterception === false ? "opacity-50 cursor-not-allowed grayscale" : ""
     },
     { icon: Unlock, label: "解锁计算机", active: false, onClick: () => setShowUnlockDialog(true) },
+    { icon: MessageSquare, label: "聊天", active: showChat, onClick: () => setShowChat(!showChat), badge: unreadChatCount > 0 ? unreadChatCount : undefined },
     { 
-      icon: MessageSquare, 
-      label: "聊天", 
-      active: showChat, 
-      onClick: () => setShowChat(!showChat),
-      badge: unreadChatCount > 0 ? unreadChatCount : undefined
+      icon: Keyboard, 
+      label: "键盘输入", 
+      active: showTextInput, 
+      onClick: () => {
+        const next = !showTextInput;
+        setShowTextInput(next);
+        setRealtimeSyncValue(" ");
+        if (next) sendInput('type_realtime', { text: "__RESET__" });
+      },
+      hideOnPC: true
     },
-    { icon: Keyboard, label: "键盘输入", active: keyboardMode, onClick: () => setKeyboardMode(!keyboardMode), className: "hidden sm:flex" },
+    { icon: Keyboard, label: "键盘事件", active: keyboardMode, onClick: () => setKeyboardMode(!keyboardMode), hideOnMobile: true },
+    {
+        icon: Gamepad2,
+        label: "按键方案",
+        dropdown: [
+          { 
+            label: isEditingKeymap ? "退出编辑" : (keymapConfig ? "编辑当前方案" : "新建方案"), 
+            onClick: () => {
+              if (isEditingKeymap) {
+                setIsEditingKeymap(false);
+              } else {
+                if (!keymapConfig) {
+                  setKeymapConfig({
+                      id: `keymap-${Date.now()}`,
+                      name: '新建方案',
+                      nodes: [],
+                      gameResolution: { width: 1920, height: 1080 }
+                  });
+                }
+                setIsEditingKeymap(true);
+              }
+            },
+            active: isEditingKeymap
+          },
+          ...savedKeymaps.map(km => ({
+            label: `加载: ${km.name}`,
+            onClick: () => {
+              if (keymapConfig?.id === km.id) {
+                setKeymapConfig(null);
+                notify({ title: "方案已卸载", message: `已取消应用方案: ${km.name}`, type: "info" });
+              } else {
+                setKeymapConfig(km);
+                notify({ title: "方案已加载", message: `已应用方案: ${km.name}`, type: "success" });
+              }
+            },
+            active: keymapConfig?.id === km.id
+          })),
+          { label: "导出当前方案", onClick: () => keymapConfig && exportConfig(keymapConfig), disabled: !keymapConfig },
+          { label: "导入方案", onClick: () => fileInputRef.current?.click() },
+          { 
+            label: "删除当前方案", 
+            onClick: () => {
+              if (keymapConfig) {
+                deleteKeymapFromStore(keymapConfig.id);
+                setKeymapConfig(null);
+                notify({ title: "方案已删除", message: "方案已从存储中移除", type: "success" });
+              }
+            }, 
+            disabled: !keymapConfig, 
+            destructive: true 
+          },
+        ]
+      },
     { 
         icon: Command, 
         label: "快捷键", 
@@ -1455,7 +1914,10 @@ useEffect(() => {
     { icon: Camera, label: "截图", onClick: () => {
         sendCommand(device.id, device.password || "", 'screen', { action: 'screenshot' });
     } },
-    { icon: Clipboard, label: "剪贴板同步", onClick: async () => {
+    { icon: ZoomIn, label: "放大", onClick: () => setZoom(prev => Math.min(3, prev + 0.2)), hideOnMobile: true },
+    { icon: ZoomOut, label: "缩小", onClick: () => setZoom(prev => Math.max(0.5, prev - 0.2)), hideOnMobile: true },
+    { icon: RotateCcw, label: "重置缩放", onClick: () => { setZoom(1); setScrollOffset({ x: 0, y: 0 }); }, hideOnMobile: true },
+    { icon: Clipboard, label: "粘贴内容发送至设备", onClick: async () => {
         try {
             const text = await navigator.clipboard.readText();
             if (text) {
@@ -1488,18 +1950,6 @@ useEffect(() => {
             sendCommand(device.id, device.password || "", 'privacy_screen', { action: 'stop' });
         }
     } },
-    { icon: RotateCcw, label: "刷新", onClick: () => {
-        const command = mode === 'screen' ? 'screen' : 'window_stream'
-        sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
-        // Force WebRTC reconnect and re-fetch TURN config
-        setReconnectCount(0); // Reset retry count for manual refresh
-        setReconnectTrigger(prev => prev + 1);
-        notify({
-            title: "正在刷新",
-            message: "已重新请求画面并重连P2P",
-            type: "info"
-        });
-    } },
     { 
       id: "performance",
       icon: Activity, 
@@ -1507,6 +1957,28 @@ useEffect(() => {
       active: showPerformance, 
       onClick: () => setShowPerformance(!showPerformance),
       className: cn("w-auto px-2 gap-1.5", latency !== null && "text-xs font-medium")
+    },
+    {
+      icon: Settings,
+      label: "画面设置",
+      hideOnPC: true,
+      dropdown: [
+        { label: "分辨率: 90%", onClick: () => setStreamScale([0.9]), keepOpen: true, active: streamScale[0] === 0.9 },
+        { label: "分辨率: 80%", onClick: () => setStreamScale([0.8]), keepOpen: true, active: streamScale[0] === 0.8 },
+        { label: "分辨率: 70%", onClick: () => setStreamScale([0.7]), keepOpen: true, active: streamScale[0] === 0.7 },
+        { label: "分辨率: 60%", onClick: () => setStreamScale([0.6]), keepOpen: true, active: streamScale[0] === 0.6 },
+        { label: "分辨率: 50%", onClick: () => setStreamScale([0.5]), keepOpen: true, active: streamScale[0] === 0.5 },
+        { label: "帧率: 150 FPS", onClick: () => setTargetFps([150]), keepOpen: true, active: targetFps[0] === 150 },
+        { label: "帧率: 60 FPS", onClick: () => setTargetFps([60]), keepOpen: true, active: targetFps[0] === 60 },
+        { label: "帧率: 30 FPS", onClick: () => setTargetFps([30]), keepOpen: true, active: targetFps[0] === 30 },
+        { label: "帧率: 15 FPS", onClick: () => setTargetFps([15]), keepOpen: true, active: targetFps[0] === 15 },
+        { label: "画质: 90%", onClick: () => setQuality([90]), keepOpen: true, active: quality[0] === 90 },
+        { label: "画质: 80%", onClick: () => setQuality([80]), keepOpen: true, active: quality[0] === 80 },
+        { label: "画质: 50%", onClick: () => setQuality([50]), keepOpen: true, active: quality[0] === 50 },
+        { label: "画质: 30%", onClick: () => setQuality([30]), keepOpen: true, active: quality[0] === 30 },
+        { label: compress ? "Zlib 压缩: 开启" : "Zlib 压缩: 关闭", onClick: () => setCompress(!compress), keepOpen: true, active: compress },
+        { label: useWebP ? "WebP 编码: 开启" : "WebP 编码: 关闭", onClick: () => setUseWebP(!useWebP), keepOpen: true, active: useWebP }
+      ]
     },
     { icon: Power, label: "电源", destructive: true, dropdown: [
         { label: "关机", destructive: true, onClick: () => {
@@ -1537,212 +2009,301 @@ useEffect(() => {
   ].filter(Boolean) as any[]
 
   return (
-    <div ref={rootRef} className="flex flex-col h-full bg-background">
+    <EditorProvider 
+      value={keymapConfig} 
+      onChange={setKeymapConfig}
+      isEditing={isEditingKeymap}
+      isDraggingNode={isDraggingNode}
+      setIsDraggingNode={setIsDraggingNode}
+      selectedNodeId={selectedNodeId}
+      onSelectNode={setSelectedNodeId}
+      showProperties={showKeymapProperties}
+      onShowPropertiesChange={setShowKeymapProperties}
+      executingNodeId={executingNodeId}
+      setExecutingNodeId={setExecutingNodeId}
+      onNodeAction={handleKeymapAction}
+    >
+    <div 
+      ref={rootRef} 
+      className={cn(
+        "flex flex-col bg-background",
+        isLandscape 
+          ? "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 origin-center rotate-90 z-50" 
+          : "h-full w-full relative"
+      )}
+      style={isLandscape ? {
+        width: '100vh',
+        height: '100vw'
+      } : {}}
+    >
       {/* Header bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-card shrink-0">
-        <div className="flex items-center gap-3">
-          {onBack && (
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onBack}>
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          )}
-          
-          <div className=" flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-success/10 text-success text-[10px] font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse-glow text-success" />
-            实时连接
-          </div>
-          <div className={cn(
-            " flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium",
-            webrtcState === 'connected' ? "bg-purple-500/10 text-purple-500" : "bg-muted text-muted-foreground"
-          )}>
-            {webrtcState === 'connected' 
-              ? `WebRTC (${connectionType === 'internal' ? '内网' : '外网'})` 
-              : "WebSocket"}
-          </div>
-          {listenAudio && (
-            <div className={cn(
-              " flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors",
-              isReceivingAudio ? "bg-blue-500/10 text-blue-500" : "bg-muted text-muted-foreground"
-            )}>
-              <Volume2 className={cn("h-3 w-3", isReceivingAudio && "animate-pulse")} />
-              {isReceivingAudio ? "正在接收音频" : "等待音频数据..."}
+      <div className={cn(
+        "flex items-center justify-between px-4 py-2 border-b border-border bg-card shrink-0",
+        isLandscape && "hidden"
+      )}>
+          <div className="flex items-center gap-3">
+            {onBack && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onBack}>
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            )}
+            
+            <div className=" flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-success/10 text-success text-[10px] font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse-glow text-success" />
+              实时连接
             </div>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="hidden md:flex items-center gap-2 mr-3 text-xs text-muted-foreground">
-            <span>分辨率: {originalSize ? `${originalSize.width}x${originalSize.height}` : '等待数据...'}</span>
-            <span className="text-border">|</span>
-            <span>缩放: {Math.round(zoom * 100)}%</span>
-            <span className="text-border">|</span>
-            <span>{fps} FPS</span>
-            <span className="text-border">|</span>
-            <span>画质 {quality}%</span>
-            <span className="text-border">|</span>
-            <span>延迟 {latency !== null ? `${latency}ms` : '--ms'}</span>
-          </div>
-          <TooltipProvider delayDuration={0}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => setFullscreen(!fullscreen)}>
-                  {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="bg-card text-card-foreground border-border">
-                {fullscreen ? "退出全屏" : "全屏"}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
-
-      {/* Toolbar */}
-      <div className="flex items-center gap-1 px-4 py-1.5 border-b border-border bg-card/50 overflow-x-auto shrink-0">
-        <TooltipProvider delayDuration={0}>
-          {toolbarActions.map((action, i) => (
-            action.dropdown ? (
-              <DropdownMenu 
-                key={i}
-                open={openDropdownIdx === i} 
-                onOpenChange={(open) => setOpenDropdownIdx(open ? i : null)}
-              >
-                <DropdownMenuTrigger asChild>
+            <div className={cn(
+              " flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium",
+              webrtcState === 'connected' ? "bg-purple-500/10 text-purple-500" : "bg-muted text-muted-foreground"
+            )}>
+              {webrtcState === 'connected' 
+                ? `WebRTC (${connectionType === 'internal' ? '内网' : '外网'})` 
+                : "WebSocket"}
+            </div>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
                   <Button 
                     variant="ghost" 
                     size="icon" 
-                    title={action.label}
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
-                    onPointerDown={(e) => {
-                      if (e.pointerType === 'touch') {
-                        e.preventDefault();
-                      }
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setOpenDropdownIdx(prev => prev === i ? null : i);
+                    className="h-6 w-6 text-muted-foreground hover:text-foreground" 
+                    onClick={handleRefresh}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-card text-card-foreground border-border">
+                  刷新连接
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            {listenAudio && (
+              <div className={cn(
+                " flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors",
+                isReceivingAudio ? "bg-blue-500/10 text-blue-500" : "bg-muted text-muted-foreground"
+              )}>
+                <Volume2 className={cn("h-3 w-3", isReceivingAudio && "animate-pulse")} />
+                {isReceivingAudio ? "正在接收音频" : "等待音频数据..."}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="hidden md:flex items-center gap-2 mr-3 text-xs text-muted-foreground">
+              <span>分辨率: {originalSize ? `${originalSize.width}x${originalSize.height}` : '等待数据...'}</span>
+              <span className="text-border">|</span>
+              <span>缩放: {Math.round(zoom * 100)}%</span>
+              <span className="text-border">|</span>
+              <span>{fps} FPS</span>
+              <span className="text-border">|</span>
+              <span>画质 {quality}%</span>
+              <span className="text-border">|</span>
+              <span>延迟 {latency !== null ? `${latency}ms` : '--ms'}</span>
+            </div>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground" 
+                    onClick={() => {
+                      const next = !isLandscape;
+                      setIsLandscape(next);
+                      if (next) setFullscreen(false);
                     }}
                   >
-                    <action.icon className="h-3.5 w-3.5" />
+                    <Smartphone className={cn("h-3.5 w-3.5 transition-transform duration-300", isLandscape ? "rotate-90" : "rotate-0")} />
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  {action.dropdown.map((item, j) => (
-                    <DropdownMenuItem 
-                      key={j} 
+                </TooltipTrigger>
+                <TooltipContent className="bg-card text-card-foreground border-border">
+                  {isLandscape ? "切换竖屏" : "切换横屏 (不支持全屏)"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground" 
+                    onClick={() => {
+                      const next = !fullscreen;
+                      setFullscreen(next);
+                      if (next) setIsLandscape(false);
+                    }}
+                  >
+                    {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-card text-card-foreground border-border">
+                  {fullscreen ? "退出全屏" : "全屏 (不支持横屏)"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+        </div>
+
+      {/* Toolbar */}
+      {!isActualMobile && (
+        <div 
+          className={cn(
+            "flex items-center gap-1 px-4 py-1.5 border-b border-border bg-card/50 overflow-x-auto shrink-0",
+            isLandscape && "fixed top-0 left-0 right-0 z-[60] bg-background/80 backdrop-blur-md"
+          )}
+        >
+          <TooltipProvider delayDuration={0}>
+            {toolbarActions.filter(action => !action.hideOnPC).map((action, i) => (
+              action.dropdown ? (
+                <DropdownMenu 
+                  key={i}
+                  open={openDropdownIdx === i} 
+                  onOpenChange={(open) => setOpenDropdownIdx(open ? i : null)}
+                >
+                  <DropdownMenuTrigger asChild>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      title={action.label}
+                      className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                      onPointerDown={(e) => {
+                        if (e.pointerType === 'touch') {
+                          e.preventDefault();
+                        }
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        item.onClick();
-                        setOpenDropdownIdx(null);
+                        setOpenDropdownIdx(prev => prev === i ? null : i);
                       }}
-                      className={cn(item.destructive && "text-destructive focus:text-destructive")}
                     >
-                      {item.label}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-            <Tooltip key={i}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size={action.id === "performance" ? "default" : "icon"}
-                  className={cn(
-                    "relative h-7 shrink-0 transition-all",
-                    action.id !== "performance" ? "w-7" : "min-w-[45px]",
-                    action.active ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground",
-                    action.destructive && "hover:text-destructive",
-                    (action as any).className
-                  )}
-                  onClick={action.onClick}
-                  disabled={(action as any).disabled}
+                      <action.icon className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    {action.dropdown.map((item, j) => (
+                      <DropdownMenuItem 
+                        key={j} 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          item.onClick();
+                          setOpenDropdownIdx(null);
+                        }}
+                        className={cn(item.destructive && "text-destructive focus:text-destructive")}
+                      >
+                        {item.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+              <Tooltip key={i}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size={action.id === "performance" ? "default" : "icon"}
+                    className={cn(
+                      "relative h-7 shrink-0 transition-all",
+                      action.id !== "performance" ? "w-7" : "min-w-[45px]",
+                      action.active ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground",
+                      action.destructive && "hover:text-destructive",
+                      (action as any).className
+                    )}
+                    onClick={action.onClick}
+                    disabled={(action as any).disabled}
+                  >
+                    <action.icon className="h-3.5 w-3.5" />
+                    {action.id === "performance" && latency !== null && (
+                      <span className="text-[10px] font-medium opacity-80 tabular-nums ml-0.5">
+                        {latency}ms
+                      </span>
+                    )}
+                    {(action as any).badge !== undefined && (typeof (action as any).badge === 'number' ? (action as any).badge > 0 : (action as any).badge !== '') && (
+                      <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-[8px] font-bold text-destructive-foreground">
+                        {typeof (action as any).badge === 'number' ? ((action as any).badge > 99 ? '99+' : (action as any).badge) : (action as any).badge}
+                      </span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-card text-card-foreground border-border">
+                  {action.label}
+                </TooltipContent>
+              </Tooltip>
+              )
+            ))}
+            <div className="flex-1" />
+            <div className="flex items-center gap-4 px-2">
+              <div className="flex items-center gap-3 border-r border-border/50 pr-4 mr-1">
+                <div className="flex flex-col gap-1 min-w-[100px]">
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>帧率: <span className="text-primary font-medium">{targetFps[0]} FPS</span></span>
+                  </div>
+                  <Slider value={targetFps} onValueChange={setTargetFps} min={5} max={150} step={5} className="h-1" />
+                </div>
+                <div className="flex flex-col gap-1 min-w-[120px]">
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>传输画质: <span className="text-primary font-medium">{quality}%</span></span>
+                  </div>
+                  <Slider value={quality} onValueChange={setQuality} min={1} max={100} step={1} className="h-1" />
+                </div>
+                <div className="flex flex-col gap-1 min-w-[120px]">
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>传输分辨率: <span className="text-primary font-medium">{Math.round(streamScale[0] * 100)}%</span></span>
+                  </div>
+                  <Slider value={streamScale} onValueChange={setStreamScale} min={0.1} max={1.0} step={0.1} className="h-1" />
+                </div>
+              </div>
+
+              <div className="hidden sm:flex items-center gap-3 border-r border-border/50 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <Switch 
+                    checked={compress} 
+                    onCheckedChange={setCompress}
+                    id="compress-mode"
+                    className="scale-75"
+                  />
+                  <Label htmlFor="compress-mode" className="text-[10px] cursor-pointer text-muted-foreground">Zlib</Label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Switch 
+                    checked={useWebP} 
+                    onCheckedChange={setUseWebP}
+                    id="webp-mode"
+                    className="scale-75"
+                  />
+                  <Label htmlFor="webp-mode" className="text-[10px] cursor-pointer text-muted-foreground">WebP</Label>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground shrink-0"
+                  onClick={() => setZoom(Math.max(0.5, zoom - 0.2))}
                 >
-                  <action.icon className="h-3.5 w-3.5" />
-                  {action.id === "performance" && latency !== null && (
-                    <span className="text-[10px] font-medium opacity-80 tabular-nums ml-0.5">
-                      {latency}ms
-                    </span>
-                  )}
-                  {(action as any).badge !== undefined && (typeof (action as any).badge === 'number' ? (action as any).badge > 0 : (action as any).badge !== '') && (
-                    <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-[8px] font-bold text-destructive-foreground">
-                      {typeof (action as any).badge === 'number' ? ((action as any).badge > 99 ? '99+' : (action as any).badge) : (action as any).badge}
-                    </span>
-                  )}
+                  <ZoomOut className="h-3.5 w-3.5" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent className="bg-card text-card-foreground border-border">
-                {action.label}
-              </TooltipContent>
-            </Tooltip>
-            )
-          ))}
-          <div className="flex-1" />
-          <div className="flex items-center gap-4 px-2">
-            <div className="flex items-center gap-3 border-r border-border/50 pr-4 mr-1">
-              <div className="flex flex-col gap-1 min-w-[120px]">
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>传输画质: <span className="text-primary font-medium">{quality}%</span></span>
+                <div className="text-[10px] font-mono text-muted-foreground min-w-[32px] text-center">
+                  {Math.round(zoom * 100)}%
                 </div>
-                <Slider value={quality} onValueChange={setQuality} min={1} max={100} step={1} className="h-1" />
-              </div>
-              <div className="flex flex-col gap-1 min-w-[120px]">
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>传输分辨率: <span className="text-primary font-medium">{Math.round(streamScale[0] * 100)}%</span></span>
-                </div>
-                <Slider value={streamScale} onValueChange={setStreamScale} min={0.1} max={1.0} step={0.1} className="h-1" />
-              </div>
-            </div>
-
-            <div className="hidden sm:flex items-center gap-3 border-r border-border/50 pr-4">
-              <div className="flex items-center gap-1.5">
-                <Switch 
-                  checked={compress} 
-                  onCheckedChange={setCompress}
-                  id="compress-mode"
-                  className="scale-75"
-                />
-                <Label htmlFor="compress-mode" className="text-[10px] cursor-pointer text-muted-foreground">Zlib</Label>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Switch 
-                  checked={useWebP} 
-                  onCheckedChange={setUseWebP}
-                  id="webp-mode"
-                  className="scale-75"
-                />
-                <Label htmlFor="webp-mode" className="text-[10px] cursor-pointer text-muted-foreground">WebP</Label>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground shrink-0"
+                  onClick={() => setZoom(Math.min(3, zoom + 0.2))}
+                >
+                  <ZoomIn className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
-
-            <div className="flex items-center gap-1">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="h-7 w-7 text-muted-foreground hover:text-foreground shrink-0"
-                onClick={() => setZoom(Math.max(0.5, zoom - 0.2))}
-              >
-                <ZoomOut className="h-3.5 w-3.5" />
-              </Button>
-              <div className="text-[10px] font-mono text-muted-foreground min-w-[32px] text-center">
-                {Math.round(zoom * 100)}%
-              </div>
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="h-7 w-7 text-muted-foreground hover:text-foreground shrink-0"
-                onClick={() => setZoom(Math.min(3, zoom + 0.2))}
-              >
-                <ZoomIn className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        </TooltipProvider>
-      </div>
+          </TooltipProvider>
+        </div>
+      )}
       
       {/* Remote screen area */}
       <div 
         ref={containerRef}
-        className="flex-1 relative overflow-hidden bg-background flex items-center justify-center outline-none cursor-none touch-none" 
+        className="flex-1 relative overflow-hidden bg-background flex items-center justify-center outline-none cursor-none touch-none select-none" 
         tabIndex={0}
         onClick={(e) => {
             if (keyboardMode) {
@@ -1764,33 +2325,63 @@ useEffect(() => {
           sendInput('keyup', { key: getPyautoguiKey(e.key) })
         }}
         onMouseDown={(e) => {
+          if (isDraggingNode) return;
           if (e.button === 1 || (e.button === 0 && e.altKey)) { 
             setIsDragging(true)
             setDragStart({ x: e.clientX, y: e.clientY })
           }
         }}
         onMouseMove={(e) => {
+          if (isDraggingNode) return;
           if (isDragging) {
-            const dx = e.clientX - dragStart.x
-            const dy = e.clientY - dragStart.y
+            let dx = e.clientX - dragStart.x
+            let dy = e.clientY - dragStart.y
+            if (isLandscape) {
+              const temp = dx;
+              dx = dy;
+              dy = -temp;
+            }
             setScrollOffset(prev => getBoundedScrollOffset(prev.x + dx, prev.y + dy, zoom))
             setDragStart({ x: e.clientX, y: e.clientY })
           }
         }}
-        onMouseUp={() => setIsDragging(false)}
-        onMouseLeave={() => setIsDragging(false)}
+        onMouseUp={() => {
+          setIsDragging(false);
+        }}
+        onMouseLeave={() => {
+          setIsDragging(false);
+        }}
         onTouchStart={(e) => {
+          if (isDraggingNode) return;
           if (e.touches.length === 1) {
              setIsPanning(true)   
              setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY })
              lastTouchTime.current = Date.now()
              isLongPressActive.current = false;
              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-             longPressTimerRef.current = setTimeout(() => {
-                isLongPressActive.current = true;
-                setShowTextInput(true);
-             }, 600);
-          } else if (e.touches.length === 2) {
+             
+             // Handle Crosshair click mode
+             if (crosshairNode && crosshairNode.mode === 'click') {
+                const targetX = crosshairNode.targetX ?? crosshairNode.x;
+                const targetY = crosshairNode.targetY ?? crosshairNode.y;
+                const remoteX = Math.round((targetX / 100) * (originalSize?.width || 1920));
+                const remoteY = Math.round((targetY / 100) * (originalSize?.height || 1080));
+                
+                sendInput('mousedown', { 
+                  x: remoteX, 
+                  y: remoteY, 
+                  button: crosshairNode.button || 'left' 
+                });
+             }
+
+             // Only set long press timer if NOT in crosshair mode
+             if (!crosshairNode) {
+               longPressTimerRef.current = setTimeout(() => {
+                  isLongPressActive.current = true;
+                  setShowTextInput(true);
+               }, 600);
+             }
+          } else if (e.touches.length === 2 && !crosshairNode) { // Disable multi-touch if crosshair
             if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
             setIsDragging(true)
             const dist = Math.hypot(
@@ -1803,20 +2394,45 @@ useEffect(() => {
           }
         }}
         onTouchMove={(e) => {
+          if (isDraggingNode) return;
           if (e.touches.length === 1) {
             if (isPanning) {
-                const dx = e.touches[0].clientX - dragStart.x
-                const dy = e.touches[0].clientY - dragStart.y
+                let dx = e.touches[0].clientX - dragStart.x
+                let dy = e.touches[0].clientY - dragStart.y
+
+                // Crosshair mode: relative mouse move instead of panning
+                if (crosshairNode) {
+                    if (isLandscape) {
+                      const temp = dx;
+                      dx = dy;
+                      dy = -temp;
+                    }
+                    
+                    const sensitivity = (crosshairNode.sensitivity || 100) / 100;
+                    sendInput('mousestep', { 
+                        dx: Math.round(dx * sensitivity), 
+                        dy: Math.round(dy * sensitivity) 
+                    });
+                    
+                    setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+                    return;
+                }
+
                 if (Math.abs(dx) > 20 || Math.abs(dy) > 20) {
                     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
                     setIsDragging(true)
                 }
                 if (isDragging) {
+                    if (isLandscape) {
+                      const temp = dx;
+                      dx = dy;
+                      dy = -temp;
+                    }
                     setScrollOffset(prev => getBoundedScrollOffset(prev.x + dx, prev.y + dy, zoom))
                     setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY })
                 }
             }
-          } else if (e.touches.length === 2) {
+          } else if (e.touches.length === 2 && !crosshairNode) { // Disable zoom if crosshair
               if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
               const dist = Math.hypot(
                 e.touches[0].clientX - e.touches[1].clientX,
@@ -1832,7 +2448,24 @@ useEffect(() => {
                 longPressTimerRef.current = null;
             }
 
-            if (!isDragging && isPanning && e.changedTouches.length === 1 && e.touches.length === 0) {
+            // Handle Crosshair release
+            if (crosshairNode) {
+                // 1. If click mode, release the button at CURRENT position (don't send coordinates)
+                if (crosshairNode.mode === 'click') {
+                    sendInput('mouseup', { 
+                        button: crosshairNode.button || 'left' 
+                    });
+                }
+                
+                // 2. Then move back to origin
+                const targetX = crosshairNode.targetX ?? crosshairNode.x;
+                const targetY = crosshairNode.targetY ?? crosshairNode.y;
+                const remoteX = Math.round((targetX / 100) * (originalSize?.width || 1920));
+                const remoteY = Math.round((targetY / 100) * (originalSize?.height || 1080));
+                sendInput('mousemove', { x: remoteX, y: remoteY });
+            }
+
+            if (!crosshairNode && !isDragging && isPanning && e.changedTouches.length === 1 && e.touches.length === 0) {
                 const now = Date.now()
                 if (!isLongPressActive.current && now - lastTouchTime.current < 500) { // Click threshold
                     if (showTextInput) setShowTextInput(false);
@@ -1840,15 +2473,25 @@ useEffect(() => {
                     if (canvasRef.current) {
                         const rect = canvasRef.current.getBoundingClientRect()
                         const touch = e.changedTouches[0]
-                        const x = touch.clientX - rect.left
-                        const y = touch.clientY - rect.top
                         
-                        if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
+                        let x = touch.clientX - rect.left
+                        let y = touch.clientY - rect.top
+                        let rectW = rect.width
+                        let rectH = rect.height
+                        
+                        if (isLandscape) {
+                            x = touch.clientY - rect.top
+                            y = rect.right - touch.clientX
+                            rectW = rect.height
+                            rectH = rect.width
+                        }
+                        
+                        if (x >= 0 && x <= rectW && y >= 0 && y <= rectH) {
                             const targetWidth = originalSize?.width || canvasRef.current.width
                             const targetHeight = originalSize?.height || canvasRef.current.height
                             
-                            let realX = Math.round((x / rect.width) * targetWidth)
-                            let realY = Math.round((y / rect.height) * targetHeight)
+                            let realX = Math.round((x / rectW) * targetWidth)
+                            let realY = Math.round((y / rectH) * targetHeight)
 
                             if (mouseMode) {
                                 sendInput('mousemove', { x: realX, y: realY })
@@ -1892,14 +2535,14 @@ useEffect(() => {
             )}
             style={{ 
               transform: `translate(${scrollOffset.x}px, ${scrollOffset.y}px) scale(${zoom})`,
-              cursor: showVirtualMouse ? 'none' : cursorStyle
+              cursor: (showVirtualMouse || isEditingKeymap) ? 'none' : cursorStyle
             }}
           >
             <canvas 
               ref={canvasRef}
               className={cn(
                 "max-w-none select-none transition-opacity",
-                !mouseMode && "opacity-90"
+                (!mouseMode || isEditingKeymap) && "opacity-90"
               )}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -1908,19 +2551,19 @@ useEffect(() => {
               onDrop={handleDrop}
               // Remove event handlers from here as they are on the container now or handled via ref
               onWheel={(e) => {
-                if (!mouseMode) return;
+                if (!mouseMode || isEditingKeymap) return;
                 sendInput('scroll', { dx: e.deltaX, dy: e.deltaY });
               }}
               onPointerMove={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect()
-                const x = e.clientX - rect.left
-                const y = e.clientY - rect.top
+                if (isEditingKeymap) return;
+                const x = e.nativeEvent.offsetX
+                const y = e.nativeEvent.offsetY
                 
                 const targetWidth = originalSize?.width || e.currentTarget.width
                 const targetHeight = originalSize?.height || e.currentTarget.height
                 
-                const realX = Math.round((x / rect.width) * targetWidth)
-                const realY = Math.round((y / rect.height) * targetHeight)
+                const realX = Math.round((x / e.currentTarget.offsetWidth) * targetWidth)
+                const realY = Math.round((y / e.currentTarget.offsetHeight) * targetHeight)
 
                 setCursorPos({ x: realX, y: realY })
                 
@@ -1936,40 +2579,38 @@ useEffect(() => {
                 }
               }}
               onPointerDown={(e) => {
-                if (!mouseMode) return
+                if (isEditingKeymap || !mouseMode) return
                 if (interactionMode === 'touch' && e.pointerType === 'touch') return;
                 if (e.button === 1 || (e.button === 0 && e.altKey)) return;
                 e.currentTarget.setPointerCapture(e.pointerId);
                 
-                const rect = e.currentTarget.getBoundingClientRect()
-                const x = e.clientX - rect.left
-                const y = e.clientY - rect.top
+                const x = e.nativeEvent.offsetX
+                const y = e.nativeEvent.offsetY
                 
                 const targetWidth = originalSize?.width || e.currentTarget.width
                 const targetHeight = originalSize?.height || e.currentTarget.height
                 
-                const realX = Math.round((x / rect.width) * targetWidth)
-                const realY = Math.round((y / rect.height) * targetHeight)
+                const realX = Math.round((x / e.currentTarget.offsetWidth) * targetWidth)
+                const realY = Math.round((y / e.currentTarget.offsetHeight) * targetHeight)
 
                 const button = e.button === 2 ? 'right' : 'left';
                 lastSentCursorPos.current = { x: realX, y: realY };
                 sendInput('mousedown', { x: realX, y: realY, button })
               }}
               onPointerUp={(e) => {
-                if (!mouseMode) return
+                if (isEditingKeymap || !mouseMode) return
                 if (interactionMode === 'touch' && e.pointerType === 'touch') return;
                 if (e.button === 1 || (e.button === 0 && e.altKey)) return;
                 try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(e) {}
                 
-                const rect = e.currentTarget.getBoundingClientRect()
-                const x = e.clientX - rect.left
-                const y = e.clientY - rect.top
+                const x = e.nativeEvent.offsetX
+                const y = e.nativeEvent.offsetY
                 
                 const targetWidth = originalSize?.width || e.currentTarget.width
                 const targetHeight = originalSize?.height || e.currentTarget.height
                 
-                const realX = Math.round((x / rect.width) * targetWidth)
-                const realY = Math.round((y / rect.height) * targetHeight)
+                const realX = Math.round((x / e.currentTarget.offsetWidth) * targetWidth)
+                const realY = Math.round((y / e.currentTarget.offsetHeight) * targetHeight)
 
                 const button = e.button === 2 ? 'right' : 'left';
                 lastSentCursorPos.current = { x: realX, y: realY };
@@ -1979,9 +2620,14 @@ useEffect(() => {
                 e.preventDefault()
               }}
             />
-            
-            {/* Old Virtual Cursor removed */}
           </div>
+
+          {/* Keymap Layers - Fixed relative to control window container */}
+          { (isEditingKeymap || (!isEditingKeymap && keymapConfig)) && (
+             <div className="absolute inset-0 z-[40] pointer-events-auto">
+               <KeymapCanvas />
+             </div>
+          )}
           
           {/* Floating Virtual Mouse Button (Mobile) */}
           {isMobile && !showVirtualMouse && (
@@ -1997,14 +2643,17 @@ useEffect(() => {
                 setMouseMode(true); 
               }}
             >
-              <MousePointer2 className="h-8 w-8 text-white" />
+              <MousePointer2 className={cn("h-8 w-8 text-white", isLandscape && "rotate90")} />
             </Button>
           )}
 
           {/* Virtual Mouse (Integrated) */}
           {showVirtualMouse && (
             <div 
-              className="absolute z-50 flex flex-col items-start touch-none scale-[0.75] origin-top-left"
+              className={cn(
+                "absolute z-50 flex flex-col items-start touch-none scale-[0.75] origin-top-left",
+                isLandscape && "rotate90"
+              )}
               style={{ 
                 left: virtualMousePos.x, 
                 top: virtualMousePos.y,
@@ -2023,7 +2672,10 @@ useEffect(() => {
             >
               {/* Cursor Arrow */}
               <div 
-                className="absolute left-0 top-0 pointer-events-none z-50 -translate-x-[2px] -translate-y-[2px]"
+                className={cn(
+                  "absolute left-0 top-0 pointer-events-none z-50 -translate-x-[2px] -translate-y-[2px]",
+                  isLandscape && "-rotate90"
+                )}
               >
                 {cursorStyle === 'text' ? (
                     <div className="w-1 h-6 bg-black border border-white shadow-sm" />
@@ -2059,10 +2711,20 @@ useEffect(() => {
               </button>
 
               {/* Mouse Body */}
-              <div className="mt-6 ml-6 w-40 h-52 bg-[#9E9E9E]/60 backdrop-blur-md rounded-[2rem] border-2 border-white/30 shadow-2xl flex flex-col overflow-hidden relative opacity-90">
+              <div 
+                className={cn(
+                  "bg-[#9E9E9E]/60 backdrop-blur-md rounded-[2rem] border-2 border-white/30 shadow-2xl overflow-hidden relative opacity-90 transition-all duration-300",
+                  "w-40 h-52 flex flex-col mt-6 ml-6"
+                )}
+              >
                 
                 {/* Top Half: L/R Buttons & Scroll */}
-                <div className="flex h-[50%] border-b-2 border-white/30 relative">
+                <div 
+                  className={cn(
+                    "relative border-white/30",
+                    "h-[50%] border-b-2 flex flex-row"
+                  )}
+                >
                   {/* Left Button */}
                   <div 
                     className="flex-1 active:bg-black/10 transition-colors"
@@ -2093,23 +2755,31 @@ useEffect(() => {
                       }
                       
                       setIsDraggingVMouse(true);
-                      const containerRect = containerRef.current?.getBoundingClientRect();
-                      if (containerRect) {
-                        vMouseDragOffset.current = {
-                          x: e.clientX - containerRect.left - virtualMousePos.x,
-                          y: e.clientY - containerRect.top - virtualMousePos.y
-                        };
-                      }
+                      vMouseDragOffset.current = {
+                        x: e.clientX,
+                        y: e.clientY
+                      };
                     }}
                     onPointerMove={(e) => {
                       e.stopPropagation();
                       if (isDraggingVMouse) {
-                        const containerRect = containerRef.current?.getBoundingClientRect();
-                        if (!containerRect) return;
+                        let dx = e.clientX - vMouseDragOffset.current.x;
+                        let dy = e.clientY - vMouseDragOffset.current.y;
+                        if (isLandscape) {
+                          const temp = dx;
+                          dx = dy;
+                          dy = -temp;
+                        }
                         
-                        const newX = e.clientX - containerRect.left - vMouseDragOffset.current.x;
-                        const newY = e.clientY - containerRect.top - vMouseDragOffset.current.y;
-                        setVirtualMousePos({ x: newX, y: newY });
+                        setVirtualMousePos(prev => ({
+                          x: prev.x + dx,
+                          y: prev.y + dy
+                        }));
+                        
+                        vMouseDragOffset.current = {
+                          x: e.clientX,
+                          y: e.clientY
+                        };
                       }
                     }}
                     onPointerUp={(e) => {
@@ -2140,7 +2810,10 @@ useEffect(() => {
                   
                   {/* Right Button */}
                   <div 
-                    className="flex-1 border-l-2 border-white/30 active:bg-black/10 transition-colors"
+                    className={cn(
+                      "flex-1 active:bg-black/10 transition-colors border-white/30",
+                      isLandscape ? "border-t-2" : "border-l-2"
+                    )}
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       e.currentTarget.setPointerCapture(e.pointerId);
@@ -2154,23 +2827,31 @@ useEffect(() => {
                       }
                       
                       setIsDraggingVMouse(true);
-                      const containerRect = containerRef.current?.getBoundingClientRect();
-                      if (containerRect) {
-                        vMouseDragOffset.current = {
-                          x: e.clientX - containerRect.left - virtualMousePos.x,
-                          y: e.clientY - containerRect.top - virtualMousePos.y
-                        };
-                      }
+                      vMouseDragOffset.current = {
+                        x: e.clientX,
+                        y: e.clientY
+                      };
                     }}
                     onPointerMove={(e) => {
                       e.stopPropagation();
                       if (isDraggingVMouse) {
-                        const containerRect = containerRef.current?.getBoundingClientRect();
-                        if (!containerRect) return;
+                        let dx = e.clientX - vMouseDragOffset.current.x;
+                        let dy = e.clientY - vMouseDragOffset.current.y;
+                        if (isLandscape) {
+                          const temp = dx;
+                          dx = dy;
+                          dy = -temp;
+                        }
                         
-                        const newX = e.clientX - containerRect.left - vMouseDragOffset.current.x;
-                        const newY = e.clientY - containerRect.top - vMouseDragOffset.current.y;
-                        setVirtualMousePos({ x: newX, y: newY });
+                        setVirtualMousePos(prev => ({
+                          x: prev.x + dx,
+                          y: prev.y + dy
+                        }));
+                        
+                        vMouseDragOffset.current = {
+                          x: e.clientX,
+                          y: e.clientY
+                        };
                       }
                     }}
                     onPointerUp={(e) => {
@@ -2188,7 +2869,7 @@ useEffect(() => {
 
                   {/* Scroll Wheel (Clock Style) */}
                   <div 
-                    className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-[#B0B0B0] rounded-full border-2 border-white/30 flex items-center justify-center touch-none shadow-inner z-10"
+                    className="absolute bg-[#B0B0B0] rounded-full border-2 border-white/30 flex items-center justify-center touch-none shadow-inner z-10 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12"
                     onPointerDown={(e) => {
                       if (!mouseMode) return;
                       e.stopPropagation();
@@ -2202,8 +2883,15 @@ useEffect(() => {
                       if (!mouseMode) return;
                       e.stopPropagation();
                       if (showClockScroll && e.buttons > 0) {
-                        const dx = e.clientX - clockScrollCenter.x;
-                        const dy = e.clientY - clockScrollCenter.y;
+                        let dx = e.clientX - clockScrollCenter.x;
+                        let dy = e.clientY - clockScrollCenter.y;
+                        
+                        if (isLandscape) {
+                          const temp = dx;
+                          dx = dy;
+                          dy = -temp;
+                        }
+                        
                         const dist = Math.sqrt(dx * dx + dy * dy);
                         const radius = 96;
                         const activationRadius = 40; // Only activate scroll when moved outside this
@@ -2255,32 +2943,43 @@ useEffect(() => {
                   </div>
                 </div>
 
-                {/* Bottom Half: Drag Area */}
+                {/* Bottom Half / Right Half: Drag Area */}
                 <div 
-                  className="flex-1 flex items-end justify-center pb-4 touch-none active:bg-black/5 transition-colors cursor-move"
+                  className={cn(
+                    "flex-1 flex items-center justify-center touch-none active:bg-black/5 transition-colors cursor-move",
+                    isLandscape ? "pl-2 pr-6" : "pb-4 pt-2"
+                  )}
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     e.currentTarget.setPointerCapture(e.pointerId);
                     setIsDraggingVMouse(true);
-                    const containerRect = containerRef.current?.getBoundingClientRect();
-                    if (containerRect) {
-                      vMouseDragOffset.current = {
-                        x: e.clientX - containerRect.left - virtualMousePos.x,
-                        y: e.clientY - containerRect.top - virtualMousePos.y
-                      };
-                    }
+                    vMouseDragOffset.current = {
+                      x: e.clientX,
+                      y: e.clientY
+                    };
                   }}
                   onPointerMove={(e) => {
-                    e.stopPropagation();
-                    if (isDraggingVMouse) {
-                      const containerRect = containerRef.current?.getBoundingClientRect();
-                      if (!containerRect) return;
-                      
-                      const newX = e.clientX - containerRect.left - vMouseDragOffset.current.x;
-                      const newY = e.clientY - containerRect.top - vMouseDragOffset.current.y;
-                      setVirtualMousePos({ x: newX, y: newY });
-                    }
-                  }}
+                      e.stopPropagation();
+                      if (isDraggingVMouse) {
+                        let dx = e.clientX - vMouseDragOffset.current.x;
+                        let dy = e.clientY - vMouseDragOffset.current.y;
+                        if (isLandscape) {
+                          const temp = dx;
+                          dx = dy;
+                          dy = -temp;
+                        }
+                        
+                        setVirtualMousePos(prev => ({
+                          x: prev.x + dx,
+                          y: prev.y + dy
+                        }));
+                        
+                        vMouseDragOffset.current = {
+                          x: e.clientX,
+                          y: e.clientY
+                        };
+                      }
+                    }}
                   onPointerUp={(e) => {
                     e.stopPropagation();
                     setIsDraggingVMouse(false);
@@ -2288,7 +2987,10 @@ useEffect(() => {
                   }}
                 >
                   {/* Drag Handle Dots */}
-                  <div className="grid grid-cols-4 gap-2 opacity-40">
+                  <div className={cn(
+                    "grid gap-2 opacity-40",
+                    isLandscape ? "grid-rows-4 grid-flow-col" : "grid-cols-4"
+                  )}>
                     {[...Array(8)].map((_, i) => (
                       <div key={i} className="w-2 h-2 bg-black rounded-full" />
                     ))}
@@ -2301,8 +3003,17 @@ useEffect(() => {
           {/* Clock Scroll Overlay */}
           {showClockScroll && (
             <div
-              className="fixed z-[100] w-48 h-48 rounded-full border-4 border-gray-400 bg-gray-300/60 backdrop-blur-md pointer-events-none flex items-center justify-center animate-in fade-in zoom-in duration-200 opacity-80"
-              style={{ left: clockScrollCenter.x - 96, top: clockScrollCenter.y - 96 }}
+              className={cn(
+                "fixed z-[100] w-48 h-48 rounded-full border-4 border-gray-400 bg-gray-300/60 backdrop-blur-md pointer-events-none flex items-center justify-center animate-in fade-in zoom-in duration-200 opacity-80",
+                isLandscape && "-rotate-90"
+              )}
+              style={isLandscape ? {
+                left: clockScrollCenter.y - 96,
+                top: window.innerWidth - clockScrollCenter.x - 96
+              } : { 
+                left: clockScrollCenter.x - 96, 
+                top: clockScrollCenter.y - 96 
+              }}
             >
               {/* Tick marks */}
               {[...Array(12)].map((_, i) => (
@@ -2330,17 +3041,23 @@ useEffect(() => {
 
           {!mouseMode && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="bg-background/40 backdrop-blur-[1px] px-4 py-2 rounded-full border border-border/50 flex items-center gap-2 text-muted-foreground animate-in fade-in zoom-in duration-300">
+                <div className={cn(
+                  "bg-background/40 backdrop-blur-[1px] px-4 py-2 rounded-full border border-border/50 flex items-center gap-2 text-muted-foreground animate-in fade-in zoom-in duration-300",
+                  isLandscape && "-rotate-90"
+                )}>
                   <Lock className="h-4 w-4" />
                   <span className="text-xs font-medium">控制已锁定</span>
                 </div>
               </div>
-            )}
+          )}
 
           {isLocked && (
             <div className="absolute inset-0 flex items-center justify-center z-40">
               <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
-              <div className="relative bg-background/90 backdrop-blur-md p-6 rounded-2xl border shadow-2xl flex flex-col items-center gap-4 max-w-xs text-center animate-in fade-in zoom-in duration-300">
+              <div className={cn(
+                "relative bg-background/90 backdrop-blur-md p-6 rounded-2xl border shadow-2xl flex flex-col items-center gap-4 max-w-xs text-center animate-in fade-in zoom-in duration-300",
+                isLandscape && "-rotate-90"
+              )}>
                 <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center">
                   <Lock className="h-6 w-6 text-amber-500" />
                 </div>
@@ -2370,7 +3087,7 @@ useEffect(() => {
         
         {/* Performance Overlay */}
         <div 
-          className="absolute top-2 left-2 flex flex-col gap-2 z-50"
+          className="absolute top-2 left-2 flex flex-col gap-2 z-50 select-none"
           onTouchStart={(e) => e.stopPropagation()}
           onTouchEnd={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
@@ -2379,7 +3096,7 @@ useEffect(() => {
           <Button
             variant={showPerformance ? "default" : "secondary"}
             size="sm"
-            className="h-8 rounded-full shadow-lg opacity-80 hover:opacity-100 flex items-center gap-2"
+            className="h-8 rounded-full shadow-lg opacity-80 hover:opacity-100 flex items-center gap-2 select-none"
             onClick={(e) => {
               e.stopPropagation();
               setShowPerformance(!showPerformance);
@@ -2387,39 +3104,70 @@ useEffect(() => {
           >
             <Activity className="h-4 w-4" />
             {latency !== null && (
-              <span className="text-[10px] font-bold tabular-nums">
+              <span className="text-[10px] font-bold tabular-nums select-none">
                 {latency}ms
               </span>
             )}
           </Button>
           
           {showPerformance && performance && (
-            <div className="bg-background/90 backdrop-blur-md p-3 rounded-xl border shadow-lg text-xs space-y-2 w-48 animate-in slide-in-from-top-2 fade-in duration-200">
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">CPU</span>
-                <span className="font-mono">{performance.cpu_percent}%</span>
+            <div className="bg-background/90 backdrop-blur-md p-3 rounded-xl border shadow-lg text-xs space-y-2 w-48 animate-in slide-in-from-top-2 fade-in duration-200 select-none">
+              <div className="flex justify-between items-center select-none">
+                <span className="text-muted-foreground select-none">CPU</span>
+                <span className="font-mono select-none">{performance.cpu_percent}%</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">内存</span>
-                <span className="font-mono">{performance.mem_percent}%</span>
+              <div className="flex justify-between items-center select-none">
+                <span className="text-muted-foreground select-none">内存</span>
+                <span className="font-mono select-none">{performance.mem_percent}%</span>
               </div>
-              <div className="h-px bg-border my-1" />
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">上传</span>
-                <span className="font-mono text-[10px]">{formatSpeed(performanceSpeed.net_sent_speed)}</span>
+              <div className="h-px bg-border my-1 select-none" />
+              <div className="flex justify-between items-center select-none">
+                <span className="text-muted-foreground select-none">上传</span>
+                <span className="font-mono text-[10px] select-none">{formatSpeed(performanceSpeed.net_sent_speed)}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">下载</span>
-                <span className="font-mono text-[10px]">{formatSpeed(performanceSpeed.net_recv_speed)}</span>
+              <div className="flex justify-between items-center select-none">
+                <span className="text-muted-foreground select-none">下载</span>
+                <span className="font-mono text-[10px] select-none">{formatSpeed(performanceSpeed.net_recv_speed)}</span>
               </div>
             </div>
           )}
         </div>
 
         {/* Cursor position overlay */}
-        <div className="absolute bottom-2 left-2 px-2 py-1 rounded bg-card/80 backdrop-blur-sm text-[10px] font-mono text-muted-foreground border border-border flex items-center gap-2">
+        <div className={cn(
+          "absolute left-2 px-2 py-1 rounded bg-card/80 backdrop-blur-sm text-[10px] font-mono text-muted-foreground border border-border flex items-center gap-2 z-50 transition-all duration-300 select-none",
+          isActualMobile ? (
+            isLandscape 
+              ? "top-1/2 left-2 -translate-y-1/2 -rotate-90" 
+              : "bottom-2"
+          ) : "bottom-2"
+        )}>
           <Move className="h-3 w-3" />
-          <span>{cursorPos.x}, {cursorPos.y}</span>
+          <span className="select-none">{cursorPos.x}, {cursorPos.y}</span>
+          
+          {isActualMobile && (
+            <>
+              <div className="w-[1px] h-3 bg-border mx-1" />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const next = !showTextInput;
+                  setShowTextInput(next);
+                  setRealtimeSyncValue(" ");
+                  if (next) {
+                    sendInput('type_realtime', { text: "__RESET__" });
+                  }
+                }}
+                className={cn(
+                  "flex items-center gap-1 transition-colors",
+                  showTextInput ? "text-primary" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Keyboard className="h-3 w-3" />
+                <span className="text-[9px] font-bold">键盘</span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* Zoom Controls Overlay */}
@@ -2433,7 +3181,14 @@ useEffect(() => {
         >
           {/* Keyboard Text Input Box */}
           {showTextInput && (
-            <div className="flex flex-col gap-2 bg-background/90 backdrop-blur-md p-2 rounded-xl border shadow-lg w-[320px] z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
+            <div className={cn(
+              "flex flex-col gap-2 bg-background/90 backdrop-blur-md p-2 rounded-xl border shadow-lg z-50 animate-in slide-in-from-bottom-2 fade-in duration-200",
+              isActualMobile ? (
+                isLandscape 
+                  ? "fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-90 w-[300px]" 
+                  : "fixed bottom-24 left-1/2 -translate-x-1/2 w-[90%]"
+              ) : "w-[320px]"
+            )}>
               <div className="flex items-center justify-between px-1">
                 <span className="text-[10px] text-muted-foreground font-medium">文本输入 (实时同步)</span>
               </div>
@@ -2533,54 +3288,124 @@ useEffect(() => {
             </div>
           )}
 
-          <div className="flex items-center gap-1">
-             <Button 
-              variant={showTextInput ? "default" : "secondary"}
-              size="icon" 
-              className="h-8 w-8 rounded-full shadow-lg mr-2"
-              onClick={(e) => {
-                e.stopPropagation();
-                const next = !showTextInput;
-                setShowTextInput(next);
-                // Always reset to a single space when toggling
-                setRealtimeSyncValue(" ");
-                // Send reset command to client to clear LAST_TYPE_STR
-                if (next) {
-                  sendInput('type_realtime', { text: "__RESET__" });
-                }
-              }}
-            >
-              <Keyboard className="h-4 w-4" />
-            </Button>
-             <Button 
-              variant="secondary" 
-              size="icon" 
-              className="h-8 w-8 rounded-full shadow-lg"
-              onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.max(0.5, prev - 0.2)); }}
-            >
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-            <div className="bg-card/80 backdrop-blur-sm px-2 py-1 rounded border border-border text-[10px] font-bold min-w-[40px] text-center">
-              {Math.round(zoom * 100)}%
+          {!isActualMobile && (
+            <div className="flex items-center gap-1">
+               <Button 
+                variant={showTextInput ? "default" : "secondary"}
+                size="icon" 
+                className="h-8 w-8 rounded-full shadow-lg mr-2"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const next = !showTextInput;
+                  setShowTextInput(next);
+                  // Always reset to a single space when toggling
+                  setRealtimeSyncValue(" ");
+                  // Send reset command to client to clear LAST_TYPE_STR
+                  if (next) {
+                    sendInput('type_realtime', { text: "__RESET__" });
+                  }
+                }}
+              >
+                <Keyboard className="h-4 w-4" />
+              </Button>
+               <Button 
+                variant="secondary" 
+                size="icon" 
+                className="h-8 w-8 rounded-full shadow-lg"
+                onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.max(0.5, prev - 0.2)); }}
+              >
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <div className="bg-card/80 backdrop-blur-sm px-2 py-1 rounded border border-border text-[10px] font-bold min-w-[40px] text-center">
+                {Math.round(zoom * 100)}%
+              </div>
+              <Button 
+                variant="secondary" 
+                size="icon" 
+                className="h-8 w-8 rounded-full shadow-lg"
+                onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.min(3, prev + 0.2)); }}
+              >
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button 
+                variant="secondary" 
+                size="icon" 
+                className="h-8 w-8 rounded-full shadow-lg ml-1"
+                onClick={(e) => { e.stopPropagation(); setZoom(1); setScrollOffset({ x: 0, y: 0 }); }}
+              >
+                <RotateCcw className="h-4 w-4" />
+              </Button>
             </div>
-            <Button 
-              variant="secondary" 
-              size="icon" 
-              className="h-8 w-8 rounded-full shadow-lg"
-              onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.min(3, prev + 0.2)); }}
-            >
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button 
-              variant="secondary" 
-              size="icon" 
-              className="h-8 w-8 rounded-full shadow-lg ml-1"
-              onClick={(e) => { e.stopPropagation(); setZoom(1); setScrollOffset({ x: 0, y: 0 }); }}
-            >
-              <RotateCcw className="h-4 w-4" />
-            </Button>
-          </div>
+          )}
         </div>
+
+        {/* Keymap Editor Overlay - Now restricted to the screen container */}
+        {isEditingKeymap && (
+          <div 
+            className="absolute inset-0 z-[100] pointer-events-none"
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
+            {/* Floating Toolbar (Left) */}
+          <div className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-[100] pointer-events-auto">
+            <KeymapToolbar />
+          </div>
+
+            {/* Floating Properties (Right) - Only show when explicitly triggered */}
+            {showKeymapProperties && keymapConfig?.nodes.some((n: any) => n.id === selectedNodeId) && (
+              <div className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-[100] pointer-events-auto max-h-[70vh] sm:max-h-[80vh] overflow-y-auto w-[240px] sm:w-[280px] shadow-2xl">
+                <KeymapProperties />
+              </div>
+            )}
+
+            {/* Top Status Bar */}
+            <div className="absolute top-2 sm:top-4 left-1/2 -translate-x-1/2 z-[100] pointer-events-auto flex flex-col items-center gap-2 sm:gap-3 w-[95%] sm:w-auto">
+              <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3 bg-slate-900/95 backdrop-blur-md border border-slate-700 px-3 sm:px-5 py-2 rounded-xl sm:rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.5)] w-full sm:w-auto">
+                <div className="flex flex-col min-w-0 max-w-[120px] sm:max-w-none">
+                <span className="text-[9px] sm:text-[10px] text-slate-500 uppercase font-bold tracking-wider truncate">当前方案</span>
+                <input 
+                  value={keymapConfig?.name || ""} 
+                  onChange={(e) => {
+                    const newName = e.target.value;
+                    setKeymapConfig((prev: any) => ({ ...prev, name: newName }));
+                  }}
+                  // 拦截所有可能导致穿透和全局键盘响应的事件
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onTouchEnd={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  onKeyUp={(e) => e.stopPropagation()}
+                  onKeyPress={(e) => e.stopPropagation()}
+                  // 点击时强制对焦以唤起键盘
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.currentTarget.focus();
+                  }}
+                  className="bg-slate-800/50 border border-slate-600/50 text-white text-xs sm:text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 rounded px-2 py-0.5 -ml-1 w-full transition-all touch-auto select-text"
+                  placeholder="输入方案名称..."
+                />        
+              </div>
+                <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                  <div className="h-6 sm:h-8 w-px bg-slate-700 mx-0.5 sm:mx-1" />
+                  <Button 
+                    size="sm" 
+                    variant="default"
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold h-8 sm:h-9 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl text-xs sm:text-sm"
+                    onClick={() => {
+                      saveKeymapToStore(keymapConfig);
+                      setIsEditingKeymap(false);
+                      notify({ title: "按键方案已保存", message: "配置已应用并保存至本地", type: "success" });
+                    }}
+                  >
+                    保存并退出
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Privacy Screen Dialog */}
@@ -2703,6 +3528,7 @@ useEffect(() => {
         onClose={() => setShowChat(false)} 
         onUnreadChange={setUnreadChatCount} 
         rtcMessage={rtcMessage}
+        isLandscape={isLandscape}
       />
 
       {/* File Upload Progress Overlays */}
@@ -2724,6 +3550,20 @@ useEffect(() => {
           ))}
         </div>
       )}
+      {isActualMobile && <MobileFloatingMenu actions={toolbarActions} isLandscape={isLandscape} />}
+
+      {/* Hidden File Input for Keymap Import */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        style={{ display: 'none' }} 
+        accept=".json" 
+        onChange={handleImportKeymap} 
+      />
+      
+      {/* Global Overlays */}
+      <KeymapKeyboardOverlay />
     </div>
+    </EditorProvider>
   )
 }
