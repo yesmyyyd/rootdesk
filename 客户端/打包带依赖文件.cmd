@@ -1,1 +1,0 @@
-python -m PyInstaller -D -w --add-data "library;library" --uac-admin -i icon.ico client.py

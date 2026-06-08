@@ -38,7 +38,8 @@ import {
   ChevronDown,
   Monitor,
   Sparkles,
-  Zap
+  Zap,
+  Plus
 } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
@@ -70,6 +71,7 @@ import { OpusDecoder } from "opus-decoder"
 import { ChatPanel } from "./chat-panel"
 import pako from 'pako'
 import { KeymapEditor, KeymapCanvas, EditorProvider, KeymapToolbar, KeymapProperties, KeymapKeyboardOverlay } from "@/components/keymap"
+import { VirtualKeyboard } from "@/components/keymap/virtual-keyboard"
 import { useKeymapStore } from "@/components/keymap/use-keymap-store"
 
 interface ToolbarAction {
@@ -314,6 +316,53 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [showTextInput, setShowTextInput] = useState(false)
   const hiddenInputRef = useRef<HTMLInputElement>(null)
   const [realtimeSyncValue, setRealtimeSyncValue] = useState(" ")
+  const [customHotkeys, setCustomHotkeys] = useState<{label: string, keys: string[]}[]>([])
+  const [isAddingHotkey, setIsAddingHotkey] = useState(false)
+  const [newHotkeyKeys, setNewHotkeyKeys] = useState<string[]>([])
+
+  useEffect(() => {
+    const saved = localStorage.getItem('yyds_custom_hotkeys')
+    if (saved) {
+      try {
+        setCustomHotkeys(JSON.parse(saved))
+      } catch (e) {}
+    }
+  }, [])
+
+  useEffect(() => {
+    if (customHotkeys.length > 0) {
+      localStorage.setItem('yyds_custom_hotkeys', JSON.stringify(customHotkeys))
+    }
+  }, [customHotkeys])
+
+  const handleKeySelectForHotkey = (key: string) => {
+    // Convert to pyautogui compatible keys
+    let finalKey = key.toLowerCase();
+    if (finalKey === 'back') finalKey = 'backspace';
+    if (finalKey === 'up') finalKey = 'up';
+    if (finalKey === 'down') finalKey = 'down';
+    if (finalKey === 'left') finalKey = 'left';
+    if (finalKey === 'right') finalKey = 'right';
+    if (finalKey === 'enter') finalKey = 'enter';
+    if (finalKey === 'esc') finalKey = 'esc';
+    if (finalKey === 'space') finalKey = 'space';
+    
+    setNewHotkeyKeys(prev => {
+      if (prev.includes(finalKey)) {
+        return prev.filter(k => k !== finalKey);
+      }
+      return [...prev, finalKey];
+    });
+  }
+
+  const handleSaveHotkey = () => {
+    if (newHotkeyKeys.length === 0) return;
+    const label = newHotkeyKeys.map(k => k.toUpperCase()).join('+');
+    setCustomHotkeys(prev => [...prev, { label, keys: newHotkeyKeys }]);
+    setIsAddingHotkey(false);
+    setNewHotkeyKeys([]);
+  }
+
   const [isReceivingAudio, setIsReceivingAudio] = useState(false)
   
   const audioTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -3166,7 +3215,12 @@ useEffect(() => {
               ? "top-1/2 left-2 -translate-y-1/2 -rotate-90" 
               : "bottom-2"
           ) : "bottom-2"
-        )}>
+        )}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
+        >
           <Move className="h-3 w-3" />
           <span className="select-none">{cursorPos.x}, {cursorPos.y}</span>
           
@@ -3217,6 +3271,72 @@ useEffect(() => {
               <div className="flex items-center justify-between px-1">
                 <span className="text-[10px] text-muted-foreground font-medium">文本输入 (实时同步)</span>
               </div>
+              
+              {/* Hotkey Shortcuts Bar */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar touch-pan-x">
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="h-7 px-2 text-[10px] shrink-0 bg-secondary/50 hover:bg-secondary"
+                  onClick={(e) => { e.stopPropagation(); sendHotkey(['enter']); }}
+                >
+                  Enter
+                </Button>
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="h-7 px-2 text-[10px] shrink-0 bg-secondary/50 hover:bg-secondary"
+                  onClick={(e) => { e.stopPropagation(); sendHotkey(['ctrl', 'c']); }}
+                >
+                  Ctrl+C
+                </Button>
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="h-7 px-2 text-[10px] shrink-0 bg-secondary/50 hover:bg-secondary"
+                  onClick={(e) => { e.stopPropagation(); sendHotkey(['ctrl', 'v']); }}
+                >
+                  Ctrl+V
+                </Button>
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="h-7 px-2 text-[10px] shrink-0 bg-secondary/50 hover:bg-secondary"
+                  onClick={(e) => { e.stopPropagation(); sendHotkey(['ctrl', 'a']); }}
+                >
+                  Ctrl+A
+                </Button>
+                
+                {customHotkeys.map((hk, i) => (
+                  <Button 
+                    key={i}
+                    variant="secondary" 
+                    size="sm" 
+                    className="h-7 px-2 text-[10px] shrink-0 bg-primary/10 text-primary hover:bg-primary/20"
+                    onClick={(e) => { e.stopPropagation(); sendHotkey(hk.keys); }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setCustomHotkeys(prev => prev.filter((_, idx) => idx !== i));
+                    }}
+                  >
+                    {hk.label}
+                  </Button>
+                ))}
+                
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="h-7 w-7 p-0 shrink-0 border-dashed border-muted-foreground/50 hover:border-primary hover:text-primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setNewHotkeyKeys([]);
+                    setIsAddingHotkey(true);
+                  }}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+
               <div className="flex items-center gap-2">
                 <input 
                   ref={hiddenInputRef}
@@ -3432,6 +3552,66 @@ useEffect(() => {
           </div>
         )}
       </div>
+
+      {/* Custom Hotkey Addition Overlay */}
+      {isAddingHotkey && (
+        <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center pointer-events-auto">
+          <VirtualKeyboard 
+            onKeySelect={handleKeySelectForHotkey}
+            onClose={() => {
+              setIsAddingHotkey(false);
+              setNewHotkeyKeys([]);
+            }}
+          />
+          <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[2001] flex flex-col items-center gap-2 pointer-events-auto">
+             <div className="bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 px-5 py-4 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col items-center gap-4 min-w-[300px] animate-in slide-in-from-top-4 fade-in duration-300">
+                <div className="flex flex-col items-center w-full">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Command className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-[0.2em]">组合键预览</span>
+                  </div>
+                  <div className="flex flex-wrap justify-center gap-2 mt-2 p-3 bg-slate-950/50 rounded-2xl border border-slate-800 w-full min-h-[48px]">
+                    {newHotkeyKeys.length === 0 ? (
+                      <span className="text-slate-600 text-xs italic flex items-center gap-2">
+                        <Zap className="w-3 h-3 animate-pulse" />
+                        请在下方键盘选择按键
+                      </span>
+                    ) : (
+                      newHotkeyKeys.map((k, i) => (
+                        <div key={i} className="flex items-center gap-1.5 animate-in zoom-in-95 duration-200">
+                          {i > 0 && <span className="text-slate-500 font-bold text-xs">+</span>}
+                          <div className="bg-blue-600 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)] px-3 py-1 rounded-xl text-xs font-black tracking-tight border border-blue-400/30">
+                            {k.toUpperCase()}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-3 w-full pt-1">
+                  <Button 
+                    variant="ghost" 
+                    className="flex-1 h-11 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 font-bold transition-all"
+                    onClick={() => {
+                      setIsAddingHotkey(false);
+                      setNewHotkeyKeys([]);
+                    }}
+                  >
+                    取消
+                  </Button>
+                  <Button 
+                    className="flex-[2] h-11 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-black shadow-[0_4px_15px_rgba(37,99,235,0.3)] transition-all disabled:opacity-50"
+                    disabled={newHotkeyKeys.length === 0}
+                    onClick={handleSaveHotkey}
+                  >
+                    保存组合键
+                  </Button>
+                </div>
+             </div>
+          </div>
+        </div>
+      )}
 
       {/* Privacy Screen Dialog */}
       <Dialog open={showPrivacyDialog} onOpenChange={setShowPrivacyDialog}>

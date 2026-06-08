@@ -10,3 +10,5 @@ server/data
 /客户端/test.py
 /客户端/1.py
 /客户端/*.spec
+/*.log
+/客户端/RootDesk_Setup.exe

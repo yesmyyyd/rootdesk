@@ -2,7 +2,7 @@
 # RootDesk 客户端脚本
 # 
 # 运行前需确保安装以下依赖库：
-# pip install aiortc websocket-client psutil pyautogui mss Pillow dxcam numpy pyaudio pystray pywebview certifi
+# pip install aiortc websocket-client psutil pyautogui mss Pillow dxcam numpy pyaudio pystray certifi PyQt5 qtawesome
 # -------------------------------------------------------------
 
 import sys
@@ -42,7 +42,7 @@ SINGLE_INSTANCE = "True"
 INSTALL_AS_SERVICE = False
 
 # --- 当前版本 ---
-CLIENT_VERSION = 5
+CLIENT_VERSION = 1
 CLIENT_VERSION_NAME = "1.0.5"
 
 
@@ -58,13 +58,6 @@ FORCE_FULL_FRAME_UNTIL = 0     # 强制发送全量帧的截止时间戳（用�
 # ----------------------------
 
 
-
-try:
-    import tkinter as tk
-    from tkinter import ttk
-    HAS_TKINTER = True
-except ImportError:
-    HAS_TKINTER = False
 
 # 系统授权与配置文件目录
 SYSTEM_AUTH_DIR = r"C:\ProgramData\SystemAuth" if platform.system() == "Windows" else os.path.join(tempfile.gettempdir(), "SystemAuth")
@@ -87,102 +80,43 @@ try:
     HAS_CERTIFI = True
 except ImportError:
     HAS_CERTIFI = False
+
+HAS_PYQT5 = False
 try:
-    import webview
-    # Windows 7 or XP should use native Tkinter UI instead of WebView
-    is_old_win = False
-    if platform.system() == "Windows":
-        try:
-            # Win XP is 5.x, Vista is 6.0, Win 7 is 6.1
-            major, minor = sys.getwindowsversion()[:2]
-            if major < 6 or (major == 6 and minor <= 1):
-                is_old_win = True
-        except:
-            if platform.release() in ["7", "XP", "Vista"]:
-                is_old_win = True
-    
-    if is_old_win:
-        print("[*] Old Windows detected (Win7/XP), using native UI.")
-        HAS_WEBVIEW = False
-    else:
-        # 使用用户提供的 evaluate_js 方案判定现代内核
-        def check_webview_env():
-            ua = ""
-            def on_load():
-                nonlocal ua
-                try:
-                    # 获取 UserAgent 并打印
-                    ua = window.evaluate_js("navigator.userAgent")
-                    print("[*] Detected UserAgent:", ua)
-                    window.destroy()
-                except:
-                    ua = ""
-            
-            # Win7 强制使用 mshtml 模式检测，现代系统自动选择
-            gui_mode = "mshtml" if is_old_win else None
-            
-            try:
-                window = webview.create_window("", html="", hidden=True)
-                window.events.loaded += on_load
-                webview.start(gui=gui_mode)
-            except:
-                return False
-
-            if ua and ("Edg/" in ua or "Chrome" in ua):
-                return True
-            return False
-
-        if platform.system() == "Windows" and not check_webview_env():
-            print("[!] WebView2 Runtime not found or legacy kernel detected. Falling back to native UI.")
-            HAS_WEBVIEW = False
-            # 弹窗提示安装 WebView2
-            if HAS_TKINTER:
-                try:
-                    import tkinter as tk
-                    from tkinter import messagebox
-                    import webbrowser
-                    root = tk.Tk()
-                    root.withdraw()
-                    # 提示用户下载或直接使用旧版
-                    resp = messagebox.askyesno("提示", "检测到系统未安装 WebView2 运行时或内核版本过低，建议安装以获得最佳体验。\n\n是否前往微软官网下载安装？\n(选择“否”将使用兼容模式运行)")
-                    if resp:
-                        webbrowser.open("https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/#download-section")
-                    root.destroy()
-                except: pass
-        else:
-            HAS_WEBVIEW = True
+    from PyQt5.QtWidgets import QApplication
+    HAS_PYQT5 = True
 except ImportError:
-    HAS_WEBVIEW = False
-WEBVIEW_WINDOW = None
+    pass
+
+HAS_PYSTRAY = False
+try:
+    import pystray
+    HAS_PYSTRAY = True
+    print("[*] pystray available")
+except ImportError:
+    print("[!] pystray not installed, tray icon will not be available")
+    pass
+
+HAS_WEBVIEW = False
 
 
 def show_notification(title, message, msg_type="info"):
-    """显示通知，优先使用 WebView，次之使用 Tkinter"""
-    global WEBVIEW_WINDOW
-    if WEBVIEW_WINDOW:
+    """显示通知，优先使用 PyQt5"""
+    if HAS_PYQT5:
         try:
-            # 逸出单引号
-            safe_msg = message.replace("'", "\'").replace("\n", " ")
-            WEBVIEW_WINDOW.evaluate_js(f"alert('{title}: {safe_msg}');")
-            return
-        except:
-            pass
-            
-    if HAS_TKINTER:
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            from tkinter import messagebox
-            if msg_type == "error":
-                messagebox.showerror(title, message)
-            else:
-                messagebox.showinfo(title, message)
-            root.destroy()
+            from PyQt5.QtWidgets import QMessageBox
+            # 必须在主线程中显示，或者确保 QApplication 已创建
+            app = QApplication.instance()
+            if app:
+                if msg_type == "error":
+                    QMessageBox.critical(None, title, message)
+                else:
+                    QMessageBox.information(None, title, message)
+                return
         except:
             pass
     print(f"[{title}] {message}")
 print(f"[*] aiortc available: {HAS_AIORTC}")
-print(f"[*] webview available: {HAS_WEBVIEW}")
 from io import BytesIO
 
 
@@ -351,32 +285,6 @@ def is_session_locked(session_id):
     return False
 
 def set_window_icon(root):
-    """Set the window icon from internal resources or the EXE itself."""
-    try:
-        if getattr(sys, 'frozen', False):
-            # 1. Try internal bundled resource (_MEIPASS)
-            meipass_dir = getattr(sys, '_MEIPASS', None)
-            if meipass_dir:
-                ico_path = os.path.join(meipass_dir, "icon.ico")
-                if os.path.exists(ico_path):
-                    root.iconbitmap(ico_path)
-                    return True
-            
-            # 2. Fallback: Use the EXE's own embedded icon (the one set with --icon during build)
-            try:
-                root.iconbitmap(sys.executable)
-                return True
-            except:
-                pass
-        else:
-            # Script mode: Try local icon.ico
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            ico_path = os.path.join(base_dir, "icon.ico")
-            if os.path.exists(ico_path):
-                root.iconbitmap(ico_path)
-                return True
-    except Exception as e:
-        print(f"[-] Failed to set window icon: {e}")
     return False
 
 # Unique Device ID and Password
@@ -644,7 +552,6 @@ WS_LOCK = threading.Lock()
 VIEWER_COUNT = 0
 ACTIVE_CONTROLLERS = {} # {client_id: {"ip": "未知", "start_time": "..."}}
 CONNECTION_HISTORY_FILE = os.path.join(SYSTEM_AUTH_DIR, "connection_history.json")
-ROOT_WINDOW = None
 
 def log_connection_history(entry):
     try:
@@ -745,40 +652,52 @@ def get_exe_icon():
         return None
 
 def create_tray_icon():
-    global TRAY_ICON, ROOT_WINDOW, WEBVIEW_WINDOW
+    global TRAY_ICON
     try:
-        if not HAS_PYSTRAY or TRAY_ICON:
+        if not HAS_PYSTRAY:
+            print("[!] Skipping tray icon: pystray not installed")
+            return
+        if TRAY_ICON:
             return
             
         print("[*] 正在创建系统托盘图标...")
-        image = get_exe_icon()
-        if not image:
+        from PIL import Image
+        
+        # In bundled mode, icon is in 'library' or MEIPASS
+        if getattr(sys, 'frozen', False):
+            base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            base_path = base_dir
+            
+        icon_path = os.path.join(base_path, "icon.ico")
+        if os.path.exists(icon_path):
+            try:
+                image = Image.open(icon_path)
+            except Exception as e:
+                print(f"[!] Failed to load icon.ico: {e}")
+                image = None
+        else:
+            print(f"[!] icon.ico not found at {icon_path}")
+            image = None
+
+        if image is None:
             # Fallback to simple icon
-            from PIL import Image, ImageDraw
-            width = 64
-            height = 64
-            image = Image.new('RGB', (width, height), "blue")
+            from PIL import ImageDraw
+            width, height = 64, 64
+            image = Image.new('RGB', (width, height), (59, 130, 246))
             dc = ImageDraw.Draw(image)
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill="white")
 
         def show_window(icon, item):
-            if ROOT_WINDOW:
-                try: ROOT_WINDOW.after(0, ROOT_WINDOW.deiconify); ROOT_WINDOW.after(0, ROOT_WINDOW.lift); ROOT_WINDOW.after(0, ROOT_WINDOW.focus_force)
-                except: pass
-            if WEBVIEW_WINDOW:
-                try: WEBVIEW_WINDOW.show()
-                except: pass
+            print("[*] Tray: Showing main window...")
+            start_pyqt_ui()
                 
         def quit_window(icon, item):
+            print("[*] Tray: Exiting program...")
             try:
-                stop_service()
                 icon.stop()
-                if ROOT_WINDOW:
-                    try: ROOT_WINDOW.after(0, ROOT_WINDOW.destroy)
-                    except: pass
-                if WEBVIEW_WINDOW:
-                    try: WEBVIEW_WINDOW.destroy()
-                    except: pass
+                stop_service()
             except: pass
             os._exit(0)
 
@@ -787,25 +706,13 @@ def create_tray_icon():
             pystray.MenuItem('退出程序', quit_window)
         )
         TRAY_ICON = pystray.Icon("RootDesk", image, "RootDesk", menu)
+        print("[*] Tray icon thread running...")
         TRAY_ICON.run()
     except Exception as e:
         print(f"[-] 创建托盘图标失败: {e}")
+        import traceback
+        traceback.print_exc()
         TRAY_ICON = None
-
-def on_webview_closing():
-    global WEBVIEW_WINDOW, TRAY_ICON
-    should_tray = CLIENT_SETTINGS.get("trayIcon", True)
-    if should_tray and HAS_PYSTRAY:
-        try:
-            WEBVIEW_WINDOW.hide()
-            if not TRAY_ICON:
-                threading.Thread(target=create_tray_icon, daemon=True).start()
-            return False # Cancel close, just hide
-        except:
-            return True
-    
-    stop_service()
-    return True
 
 # WebRTC Globals
 RTC_PCS = {} # clientId -> RTCPeerConnection
@@ -939,16 +846,17 @@ def safe_send(ws, data, opcode=None):
                         print(f"[-] WebRTC send error for client {cid}: {e}")
                 elif dc.readyState in ["closed", "closing"]:
                     # Clean up if we find a closed channel during send
-                    if cid in RTC_DCS: del RTC_DCS[cid]
+                    RTC_DCS.pop(cid, None)
                     if cid in RTC_PCS:
                         # Attempt to close the PC as well
                         if RTC_LOOP and RTC_LOOP.is_running():
                             asyncio.run_coroutine_threadsafe(RTC_PCS[cid].close(), RTC_LOOP)
-                        del RTC_PCS[cid]
+                        RTC_PCS.pop(cid, None)
     
     # IMPORTANT: If data was sent via RTC to ALL active viewers, skip WebSocket for large data.
     # This prevents duplicate bandwidth, "double sound" in audio, and "frame rollback".
-    all_on_rtc = (VIEWER_COUNT > 0 and len(RTC_DCS) >= VIEWER_COUNT)
+    open_rtc_channels = [dc for dc in RTC_DCS.values() if dc.readyState == "open"]
+    all_on_rtc = (VIEWER_COUNT > 0 and len(open_rtc_channels) >= VIEWER_COUNT)
     if all_on_rtc and rtc_success:
         if isinstance(data, (bytes, bytearray)) and len(data) > 0:
             header = data[0]
@@ -1051,14 +959,16 @@ async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
         "start_timestamp": time.time()
     }
     
-    # 强制清理该客户端的旧连接
+    # 强制清理该客户端的旧连接与队列
+    RTC_CANDIDATE_QUEUES.pop(client_id, None)
     if client_id in RTC_PCS:
         print(f"[*] 正在关闭客户端 {client_id} 的现有 PeerConnection...")
-        try:
-            await asyncio.wait_for(RTC_PCS[client_id].close(), timeout=3.0)
-        except: pass
-        del RTC_PCS[client_id]
-        if client_id in RTC_DCS: del RTC_DCS[client_id]
+        old_pc = RTC_PCS.pop(client_id, None)
+        RTC_DCS.pop(client_id, None)
+        if old_pc:
+            try:
+                await asyncio.wait_for(old_pc.close(), timeout=3.0)
+            except: pass
     
     # Fetch dynamic TURN config
     print(f"[*] 正在为客户端 {client_id} 获取动态 TURN 配置...")
@@ -1153,8 +1063,11 @@ async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
                     "start_ts": info.get("start_timestamp", time.time()),
                     "end_ts": time.time()
                 })
-            if client_id in RTC_DCS: del RTC_DCS[client_id]
-            if client_id in RTC_PCS: del RTC_PCS[client_id]
+            # 只有当全局字典里的 PC 还是当前这个 PC 时才进行清理
+            # 这样可以避免新连接建立后，旧连接的 close 事件把新连接给删了
+            if RTC_PCS.get(client_id) == pc:
+                RTC_PCS.pop(client_id, None)
+                RTC_DCS.pop(client_id, None)
 
     @pc.on("icecandidate")
     def on_icecandidate(candidate):
@@ -1183,7 +1096,7 @@ async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
             print(f"[*] 正在处理队列中等待的 {len(RTC_CANDIDATE_QUEUES[client_id])} 个 ICE Candidate (Client: {client_id})")
             for cand in RTC_CANDIDATE_QUEUES[client_id]:
                 await add_ice_candidate(cand, client_id)
-            del RTC_CANDIDATE_QUEUES[client_id]
+            RTC_CANDIDATE_QUEUES.pop(client_id, None)
 
         print(f"[*] 正在创建应答 (Answer, Client: {client_id})...")
         answer = await pc.createAnswer()
@@ -1640,10 +1553,10 @@ if platform.system() == "Windows":
             from ctypes import wintypes
             
             # 使用 Device ID 生成唯一的互斥体名称 (Global 前缀确保跨会话唯一)
-            # 注意：Python 中 "Global\" 产生的字符串是 "Global"，这是 Windows 要求的标准格式 必须要使用rf 否则报错 不要删掉
             prefix = "RootDeskUI_" if is_ui else "RootDeskRemote_"
-            scope = "Local\" if is_ui else \"Global"
-            mutex_name = f"{scope}{prefix}" + DEVICE_ID.replace(' ', '')
+            scope = "Local\\" if is_ui else "Global\\"
+            did_suffix = DEVICE_ID.replace(' ', '') if DEVICE_ID else "Default"
+            mutex_name = f"{scope}{prefix}{did_suffix}"
             
             kernel32 = ctypes.windll.kernel32
             mutex = kernel32.CreateMutexW(None, False, mutex_name)
@@ -1652,6 +1565,8 @@ if platform.system() == "Windows":
             if last_error == 183: # ERROR_ALREADY_EXISTS
                 if not check_only:
                     print(f"[!] Another {'UI ' if is_ui else ''}instance is already running. Exiting.")
+                    if is_ui:
+                        show_notification("程序已在运行", "检测到 RootDesk 已在运行，请检查系统托盘或任务管理器。")
                 return False
                 
             if check_only:
@@ -1785,7 +1700,11 @@ if platform.system() == "Windows":
         print("[*] Guardian Service started. Launching UI via PsExec...")
 
         # 1. 确定路径
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
         psexec_path = os.path.join(base_dir, "library", "PsExec.exe")
         final_exe_path = sys.executable
 
@@ -1798,6 +1717,15 @@ if platform.system() == "Windows":
             # PsExec 参数: /accepteula -i 1 (Session 1) -s (System) -d (不等待)
             # 加上 --monitor 参数防止 UI 进程再次尝试安装服务
             cmd = [psexec_path, "/accepteula", "-i", "1", "-s", "-d", final_exe_path, "--monitor"]
+            
+            # 将生成的命令写入本地文件，方便调试查看路径是否正确
+            try:
+                if not os.path.exists(SYSTEM_AUTH_DIR): os.makedirs(SYSTEM_AUTH_DIR)
+                with open(os.path.join(SYSTEM_AUTH_DIR, "debug_psexec_cmd.txt"), "w", encoding="utf-8") as f:
+                    f.write(" ".join([f'"{c}"' if " " in c else c for c in cmd]))
+            except:
+                pass
+
             subprocess.run(cmd, capture_output=True)
             print("[+] UI launch command sent via PsExec.")
         except Exception as e:
@@ -1806,7 +1734,7 @@ if platform.system() == "Windows":
         # 3. 关键改动：进入无限循环，防止进程退出导致 NSSM 重启
         print("[*] Guardian Service is now idle (maintaining process).")
         while True:
-            time.sleep(3600)  # 每小时唤醒一次，基本不占 CPU
+            time.sleep(100)  # 每小时唤醒一次，基本不占 CPU
 
 
     def install_windows_service():
@@ -2528,8 +2456,9 @@ def stream_worker():
                         return True
             
             # 如果是 WebRTC 且没有走 Relay (TURN)，通常也是 P2P 直连，内网环境性能极佳
-            # 这里简单判断：如果 RTC 已建立，且地址是内网，则视为本地连接
-            if RTC_DC and RTC_DC.readyState == "open":
+            # 这里简单判断：如果 RTC 已建立，则视为潜在本地连接（优化传输逻辑）
+            has_open_rtc = any(dc.readyState == "open" for dc in RTC_DCS.values())
+            if has_open_rtc:
                 # 暂无法直接从 aiortc 获取对端 IP，但如果是内网 RTC，通常 WS 也会是内网或 127.0.0.1
                 # 如果用户明确知道是内网 RTC，可以信任 RTC_DC 的带宽
                 pass
@@ -3597,56 +3526,7 @@ def get_path_at_point(x, y):
         return os.path.expanduser("~/Desktop")
 
 def create_progress_window(transfer_id, filename, total_size, ws):
-    try:
-        root = tk.Tk()
-        root.withdraw() # Hide immediately
-        set_window_icon(root)
-        root.title("文件传输")
-        root.attributes("-topmost", True)
-        
-        # Position
-        window_width = 400
-        window_height = 150
-        screen_width = root.winfo_screenwidth()
-        screen_height = root.winfo_screenheight()
-        x = (screen_width - window_width) // 2
-        y = (screen_height - window_height) // 2
-        
-        root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        root.minsize(window_width, window_height)
-        root.resizable(True, True)
-        root.deiconify() # Show
-
-        label = tk.Label(root, text=f"正在接收: {filename}", wraplength=250)
-        label.pack(pady=5)
-
-        progress = ttk.Progressbar(root, orient="horizontal", length=250, mode="determinate")
-        progress.pack(pady=5)
-        progress["maximum"] = 100
-        progress["value"] = 0
-
-        def on_close():
-            if transfer_id in ACTIVE_TRANSFERS:
-                transfer = ACTIVE_TRANSFERS[transfer_id]
-                transfer["file"].close()
-                if os.path.exists(transfer["path"]):
-                    try: os.remove(transfer["path"])
-                    except: pass
-                del ACTIVE_TRANSFERS[transfer_id]
-                safe_send(ws, json.dumps({
-                    "type": "file_cancel",
-                    "data": {"transferId": transfer_id, "filename": filename}
-                }))
-            root.destroy()
-
-        # Add close button (X)
-        close_btn = tk.Button(root, text="X", command=on_close, bd=0, fg="red", font=("Arial", 10, "bold"))
-        close_btn.place(x=275, y=5)
-
-        return root, progress
-    except Exception as e:
-        print(f"Error creating progress window: {e}")
-        return None, None
+    return None, None
 
 def handle_files(ws, args):
     if "files" not in ENABLED_MODULES: return
@@ -3675,18 +3555,7 @@ def handle_files(ws, args):
                     target_path = f"{base} ({counter}){ext}"
                     counter += 1
                 
-                f = open(target_path, "wb")
-                
-                def run_gui():
-                    if not HAS_TKINTER:
-                        print(f"[*] Receiving {filename} ({total_size} bytes)... (GUI not available)")
-                        return
-                    root, pb = create_progress_window(transfer_id, filename, total_size, ws)
-                    if root and pb:
-                        ACTIVE_TRANSFERS[transfer_id]["window"] = root
-                        ACTIVE_TRANSFERS[transfer_id]["progress_bar"] = pb
-                        root.mainloop()
-
+                print(f"[*] Receiving {filename} ({total_size} bytes)...")
                 ACTIVE_TRANSFERS[transfer_id] = {
                     "file": f,
                     "path": target_path,
@@ -3695,8 +3564,6 @@ def handle_files(ws, args):
                     "window": None,
                     "progress_bar": None
                 }
-                
-                threading.Thread(target=run_gui, daemon=True).start()
             return
 
         if action == "file_cancel":
@@ -4649,18 +4516,12 @@ def handle_privacy_screen(ws, args):
                     PRIVACY_LABEL.config(text=message)
                     PRIVACY_WINDOW.deiconify()
                     # Ensure our control panel stays on top
-                    if ROOT_WINDOW:
-                        try:
-                            ROOT_WINDOW.attributes("-topmost", True)
-                            ROOT_WINDOW.lift()
-                        except:
-                            pass
                     return
             except:
                 pass
             
         def create_window():
-            global PRIVACY_WINDOW, PRIVACY_LABEL, ROOT_WINDOW
+            global PRIVACY_WINDOW, PRIVACY_LABEL
             try:
                 import tkinter as tk
                 root = tk.Tk()
@@ -4672,12 +4533,7 @@ def handle_privacy_screen(ws, args):
                 root.overrideredirect(True)
                 
                 # Ensure our control panel stays on top
-                if ROOT_WINDOW:
-                    try:
-                        ROOT_WINDOW.attributes("-topmost", True)
-                        ROOT_WINDOW.lift()
-                    except:
-                        pass
+                pass
                 
                 label = tk.Label(root, text=message, fg='white', bg='black', font=('Arial', 32))
                 label.pack(expand=True)
@@ -4940,14 +4796,9 @@ def handle_verify_result(ws, args):
     success = args.get("success", False)
     message = args.get("message", "未知错误")
     if not success:
-        global ROOT_WINDOW
-        if ROOT_WINDOW:
-            def show_error():
-                from tkinter import messagebox
-                messagebox.showerror("连接失败", message)
-            ROOT_WINDOW.after(0, show_error)
-        else:
+        if True:
             print(f"[-] Connection failed: {message}")
+            show_notification("连接失败", message, "error")
 
 def on_message(ws, message):
     def process_message(msg):
@@ -5085,8 +4936,8 @@ def on_message(ws, message):
                         else:
                             # Fallback if loop is not available (unlikely)
                             pass
-                    if client_id in RTC_PCS: del RTC_PCS[client_id]
-                    if client_id in RTC_DCS: del RTC_DCS[client_id]
+                    RTC_PCS.pop(client_id, None)
+                    RTC_DCS.pop(client_id, None)
             elif cmd == "exec" and "terminal" in ENABLED_MODULES:
                 try:
                     cmd_str = str(args).strip()
@@ -5563,12 +5414,6 @@ def check_local_commands_loop():
                         DEVICE_PASSWORD = new_pwd
                         print(f"[*] Password updated via IPC to: {DEVICE_PASSWORD}")
                         
-                        # Notify WebView if active
-                        if WEBVIEW_WINDOW:
-                            try:
-                                WEBVIEW_WINDOW.evaluate_js(f"if(window.onPasswordChanged) window.onPasswordChanged('{DEVICE_PASSWORD}')")
-                            except: pass
-                        
                         # 3. Send to server
                         if 'WS_CLIENT' in globals() and WS_CLIENT and SERVER_CONNECTED:
                             safe_send(WS_CLIENT, json.dumps({
@@ -5584,126 +5429,30 @@ def check_local_commands_loop():
         time.sleep(2)
 
 def show_update_dialog(name, desc, url, force):
-    """显示更新对话框 - 全局可用"""
-    try:
-        global ROOT_WINDOW
-        root = ROOT_WINDOW
-        if not root:
-            import tkinter as tk
-            root = tk.Tk()
-            root.withdraw()
-            ROOT_WINDOW = root
-
-        update_win = tk.Toplevel(root)
-        update_win.title("发现新版本")
-        update_win.geometry("400x320")
-        update_win.resizable(False, False)
-        update_win.attributes("-topmost", True)
-        
-        # Center window
-        update_win.update_idletasks()
-        width = update_win.winfo_width()
-        height = update_win.winfo_height()
-        x = (update_win.winfo_screenwidth() // 2) - (width // 2)
-        y = (update_win.winfo_screenheight() // 2) - (height // 2)
-        update_win.geometry(f'{width}x{height}+{x}+{y}')
-
-        if force:
-            update_win.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
-        
-        tk.Label(update_win, text=f"发现新版本: {name}", font=("Arial", 12, "bold")).pack(pady=10)
-        
-        import tkinter.ttk as ttk
-        desc_frame = ttk.Frame(update_win)
-        desc_frame.pack(padx=20, pady=5, fill=tk.BOTH, expand=True)
-        
-        desc_text = tk.Text(desc_frame, height=8, width=45, font=("Arial", 10))
-        desc_text.insert(tk.END, desc)
-        desc_text.config(state=tk.DISABLED)
-        desc_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        scrollbar = ttk.Scrollbar(desc_frame, command=desc_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        desc_text['yscrollcommand'] = scrollbar.set
-        
-        btn_frame = ttk.Frame(update_win)
-        btn_frame.pack(pady=10)
-        
-        def start_update():
-            update_win.destroy()
-            import threading
-            threading.Thread(target=perform_update, args=(url,), daemon=True).start()
-        
-        ttk.Button(btn_frame, text="立即更新", command=start_update).pack(side=tk.LEFT, padx=10)
-        
-        if not force:
-            ttk.Button(btn_frame, text="以后再说", command=update_win.destroy).pack(side=tk.LEFT, padx=10)
-        else:
-            tk.Label(update_win, text="此版本为强制更新，请更新后使用", fg="red", font=("Arial", 9)).pack()
-    except Exception as e:
-        print(f"Failed to show update dialog: {e}")
-        
-        ttk.Button(btn_frame, text="立即更新", command=start_update).pack(side=tk.LEFT, padx=10)
-        
-        if not force:
-            ttk.Button(btn_frame, text="以后再说", command=update_win.destroy).pack(side=tk.LEFT, padx=10)
-        else:
-            tk.Label(update_win, text="此版本为强制更新，请更新后使用", fg="red", font=("Arial", 9)).pack()
-    except Exception as e:
-        print(f"Failed to show update dialog: {e}")
+    """显示更新提示"""
+    print(f"[*] New version available: {name} - {url}")
+    show_notification("新版本可用", f"发现新版本 {name}，请前往官网下载。")
 
 def perform_update(url):
-    """执行更新过程 - 全局可用"""
+    """执行更新过程"""
+    print(f"[*] Starting update download from {url}")
     try:
         import requests
         import tempfile
-        import tkinter as tk
-        import tkinter.ttk as ttk
-        from tkinter import messagebox
-        global ROOT_WINDOW
-        root = ROOT_WINDOW
+        import subprocess
         
-        if not root:
-            root = tk.Tk()
-            root.withdraw()
-            ROOT_WINDOW = root
-
-        # Create a progress window
-        progress_win = tk.Toplevel(root)
-        progress_win.title("正在更新...")
-        progress_win.geometry("300x120")
-        progress_win.attributes("-topmost", True)
-        
-        # Center window
-        progress_win.update_idletasks()
-        x = (progress_win.winfo_screenwidth() // 2) - (150)
-        y = (progress_win.winfo_screenheight() // 2) - (60)
-        progress_win.geometry(f'300x120+{x}+{y}')
-        
-        tk.Label(progress_win, text="正在下载新版本，请稍候...", font=("Arial", 10)).pack(pady=20)
-        progress = ttk.Progressbar(progress_win, length=200, mode='determinate')
-        progress.pack(pady=5)
+        auth_dir = SYSTEM_AUTH_DIR
+        if not os.path.exists(auth_dir):
+            os.makedirs(auth_dir, exist_ok=True)
+        temp_exe = os.path.join(auth_dir, "RootDesk_update.exe")
         
         response = requests.get(url, stream=True, timeout=60)
         if response.status_code == 200:
-            total_size = int(response.headers.get('content-length', 0))
-            auth_dir = SYSTEM_AUTH_DIR
-            if not os.path.exists(auth_dir):
-                try: os.makedirs(auth_dir)
-                except: pass
-            temp_exe = os.path.join(auth_dir, "RootDesk_update.exe")
-            
-            downloaded = 0
             with open(temp_exe, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress['value'] = (downloaded / total_size) * 100
-                            progress_win.update()
             
-            # Replacement VBScript
             def get_long_path(p):
                 try:
                     import ctypes
@@ -5721,14 +5470,10 @@ def perform_update(url):
             vbs_content = f'''Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 WScript.Sleep 2000
-' Try to stop service if it exists
 On Error Resume Next
-shell.Run "sc stop RootDeskService", 0, True
-' Force kill process
 shell.Run "taskkill /f /im ""{exe_name}""", 0, True
 On Error GoTo 0
 WScript.Sleep 1000
-' Loop until delete succeeds (to handle locks)
 Do While fso.FileExists("{vbs_current_exe}")
     On Error Resume Next
     fso.DeleteFile "{vbs_current_exe}", True
@@ -5736,577 +5481,22 @@ Do While fso.FileExists("{vbs_current_exe}")
     On Error GoTo 0
     WScript.Sleep 1000
 Loop
-' Move new exe
-If fso.FileExists("{vbs_temp_exe}") Then
-    ' Ensure destination directory exists
-    destDir = fso.GetParentFolderName("{vbs_current_exe}")
-    If Not fso.FolderExists(destDir) Then
-        MsgBox "更新失败：目标目录不存在 " & destDir, 16, "错误"
-        WScript.Quit
-    End If
-    fso.MoveFile "{vbs_temp_exe}", "{vbs_current_exe}"
-Else
-    MsgBox "更新失败：找不到下载的更新文件 " & "{vbs_temp_exe}", 16, "错误"
-    WScript.Quit
-End If
-' Restart service or app
-On Error Resume Next
-shell.Run "sc start RootDeskService", 0, False
+fso.MoveFile "{vbs_temp_exe}", "{vbs_current_exe}"
 shell.Run chr(34) & "{vbs_current_exe}" & chr(34), 1, False
-' Self delete
-Set f = fso.GetFile(WScript.ScriptFullName)
-f.Delete
+fso.DeleteFile WScript.ScriptFullName, True
 '''
             with open(vbs_script, "w", encoding="gbk") as f:
                 f.write(vbs_content)
             
             subprocess.Popen(["wscript.exe", vbs_script], shell=True)
             os._exit(0)
-        else:
-            messagebox.showerror("错误", f"下载失败，状态码: {response.status_code}")
-            progress_win.destroy()
     except Exception as e:
         print(f"Perform update failed: {e}")
-        try: messagebox.showerror("更新失败", str(e))
-        except: pass
-
-def start_local_ui():
-    global HAS_TKINTER, DEVICE_ID, DEVICE_PASSWORD, PLATFORM_MODE, SERVER_CONNECTED, STREAM_RUNNING, PORT, HOST, VIEWER_COUNT, ROOT_WINDOW
-    if not HAS_TKINTER or ROOT_WINDOW:
-        return
-    
-    try:
-        import tkinter as tk
-        from tkinter import messagebox, ttk
-        import webbrowser
-        
-        # Define update_viewer_count globally so on_message can call it
-        def update_viewer_count(count):
-            global VIEWER_COUNT
-            VIEWER_COUNT = count
-        globals()['update_viewer_count'] = update_viewer_count
-        
-        root = tk.Tk()
-        root.withdraw() # Hide immediately to prevent flickering
-        
-        # Ensure DPI settings are applied and layout is ready
-        root.update_idletasks()
-        
-        set_window_icon(root)
-        ROOT_WINDOW = root
-        root.title(f"RootDesk v{CLIENT_VERSION_NAME}")
-        
-        # Calculate center position first
-        window_width = 500
-        window_height = 400
-        screen_width = root.winfo_screenwidth()
-        screen_height = root.winfo_screenheight()
-        x = (screen_width // 2) - (window_width // 2)
-        y = (screen_height // 2) - (window_height // 2)
-        
-        # Set geometry and strictly lock size
-        root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        root.minsize(window_width, window_height)
-        root.resizable(True, True)
-        
-        root.deiconify() # Show now that everything is ready
-        
-        notebook = ttk.Notebook(root)
-        notebook.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # --- Home Tab ---
-        frame_home = ttk.Frame(notebook)
-        notebook.add(frame_home, text='首页')
-        
-        # --- Assistance Tab ---
-        frame_assist = ttk.Frame(notebook)
-        notebook.add(frame_assist, text='协助')
-        
-        tk.Label(frame_assist, text="发起协助请求", font=("Arial", 12, "bold")).pack(pady=(20, 10))
-        tk.Label(frame_assist, text="输入对方的9位协助码以请求其控制此设备", font=("Arial", 9), fg="gray").pack(pady=(0, 20))
-        
-        assist_entry_frame = ttk.Frame(frame_assist)
-        assist_entry_frame.pack(pady=10)
-        
-        tk.Label(assist_entry_frame, text="协助码:", font=("Arial", 10, "bold")).grid(row=0, column=0, padx=5)
-        assist_code_entry = ttk.Entry(assist_entry_frame, font=("Arial", 12), width=15, justify='center')
-        assist_code_entry.grid(row=0, column=1, padx=5)
-        
-        def send_assist_request():
-            code = assist_code_entry.get().strip().replace(" ", "")
-            if not code or len(code) != 9 or not code.isdigit():
-                messagebox.showerror("错误", "请输入有效的9位数字协助码")
-                return
-            
-            if not SERVER_CONNECTED or not WS_CLIENT:
-                messagebox.showerror("错误", "未连接到服务器，请稍后再试")
-                return
-            
-            # Send assistance request
-            safe_send(WS_CLIENT, json.dumps({
-                "type": "assistance_request",
-                "code": code,
-                "deviceId": DEVICE_ID.replace(" ", ""),
-                "password": DEVICE_PASSWORD,
-                "info": get_system_info()
-            }))
-            messagebox.showinfo("请求已发送", f"已向协助码 {code} 发起请求\n请等待对方接受")
-            
-        ttk.Button(frame_assist, text="发起请求", command=send_assist_request).pack(pady=20)
-
-        # --- Home Tab Content ---
-        tk.Label(frame_home, text="RootDesk 远程控制", font=("Arial", 14, "bold")).pack(pady=(10, 5))
-        
-        info_frame = ttk.Frame(frame_home)
-        info_frame.pack(pady=5)
-        
-        tk.Label(info_frame, text="设备代码:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        tk.Label(info_frame, text=DEVICE_ID, font=("Arial", 10)).grid(row=0, column=1, sticky="w", padx=5, pady=2)
-        
-        tk.Label(info_frame, text="设备密码:", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        pwd_label = tk.Label(info_frame, text=DEVICE_PASSWORD, font=("Arial", 10))
-        pwd_label.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        
-        def change_password():
-            import random
-            import string
-            import json
-            import os
-            import tempfile
-            import platform
-            global DEVICE_PASSWORD, SERVER_CONNECTED, WS_CLIENT
-            # Generate 8-character alphanumeric password (Uppercase only)
-            new_pwd = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-            DEVICE_PASSWORD = new_pwd
-            
-            # 1. 写入命令队列，让服务进程同步 (Service 模式)
-            try:
-                cmd_dir = SYSTEM_AUTH_DIR
-                os.makedirs(cmd_dir, exist_ok=True)
-                cmd_file = os.path.join(cmd_dir, "cmd_queue.dat")
-                
-                with open(cmd_file, "w") as f:
-                    json.dump({"action": "update_password", "password": new_pwd}, f)
-            except Exception as e:
-                print(f"[-] 写入状态文件失败: {e}")
-                
-            # 2. 如果当前进程已连接服务器 (Portable 模式)，直接同步
-            if 'WS_CLIENT' in globals() and WS_CLIENT and SERVER_CONNECTED:
-                try:
-                    safe_send(WS_CLIENT, json.dumps({
-                        "type": "update_password",
-                        "deviceId": DEVICE_ID.replace(" ", ""),
-                        "role": CLIENT_ROLE,
-                        "data": {"password": new_pwd}
-                    }))
-                except Exception as e:
-                    print(f"[-] 发送新密码至服务器失败: {e}")
-            
-            # 3. 更新 UI
-            pwd_label.config(text=DEVICE_PASSWORD)
-            messagebox.showinfo("密码已更改", f"新密码: {DEVICE_PASSWORD}")
-            
-        def copy_control_link():
-            from tkinter import messagebox
-            clean_id = DEVICE_ID.replace(" ", "")
-            # Ensure APP_URL is correctly formatted
-            base_url = APP_URL
-            if not base_url.endswith("/"):
-                base_url += "/"
-            link = f"{base_url}?deviceId={clean_id}&password={DEVICE_PASSWORD}"
-            try:
-                root.clipboard_clear()
-                root.clipboard_append(link)
-                root.update()
-                messagebox.showinfo("成功", f"控制链接已复制到剪贴板\n他人访问即可快捷添加此设备")
-            except Exception as e:
-                messagebox.showerror("错误", f"复制失败: {e}")
-
-        ttk.Button(info_frame, text="更改密码", command=change_password).grid(row=1, column=2, padx=5)
-        ttk.Button(info_frame, text="复制链接", command=copy_control_link).grid(row=1, column=3, padx=5)
-        
-        status_frame = ttk.Frame(frame_home)
-        status_frame.pack(pady=5)
-        
-        conn_label = tk.Label(status_frame, text="服务器状态: 连接中...", fg="orange", font=("Arial", 10))
-        conn_label.grid(row=0, column=0, padx=10)
-        
-        ctrl_label = tk.Label(status_frame, text="控制状态: 空闲", fg="green", font=("Arial", 10))
-        ctrl_label.grid(row=0, column=1, padx=10)
-        
-        # --- Driver & Service Missing Warning (ToDesk style) ---
-        if (not HAS_INTERCEPTION or SHOW_SERVICE_WARNING) and platform.system() == "Windows":
-            driver_frame = tk.Frame(frame_home, bg="#FFF9C4", bd=1, relief="solid") # Light yellow background
-            driver_frame.pack(fill=tk.X, padx=20, pady=10)
-            
-            # Dynamic message based on missing items
-            if not is_admin():
-                warning_text = "需要管理员权限以安装驱动及服务"
-                button_text = "立即提升"
-            elif not HAS_INTERCEPTION and SHOW_SERVICE_WARNING:
-                warning_text = "检测到未安装控制驱动及系统服务，无法正常控制"
-                button_text = "立即安装"
-            elif not HAS_INTERCEPTION:
-                warning_text = "检测到未安装控制驱动，无法进行鼠标键盘控制"
-                button_text = "立即安装"
-            else:
-                warning_text = "检测到未安装系统服务，程序可能运行不稳定"
-                button_text = "立即安装"
-
-            warning_label = tk.Label(driver_frame, text=warning_text, bg="#FFF9C4", fg="#856404", font=("Arial", 9))
-            warning_label.pack(side=tk.LEFT, padx=10, pady=5)
-            
-            def on_driver_install_click():
-                if not is_admin():
-                    if messagebox.askyesno("权限不足", "安装驱动及服务需要管理员权限。是否尝试立即提升权限？"):
-                        elevate_process()
-                    return
-                
-                install_msg = "安装驱动及服务" if not HAS_INTERCEPTION and SHOW_SERVICE_WARNING else ("安装驱动" if not HAS_INTERCEPTION else "注册服务")
-                if messagebox.askyesno(install_msg, f"{install_msg}需要管理员权限，并会在完成后重启电脑。是否继续？"):
-                    install_interception_driver()
-
-            install_btn = tk.Button(driver_frame, text=button_text, command=on_driver_install_click, bg="#0078D4", fg="white", font=("Arial", 9, "bold"), relief="flat", padx=10)
-            install_btn.pack(side=tk.RIGHT, padx=10, pady=5)
-            install_btn.bind("<Enter>", lambda e: install_btn.config(cursor="hand2"))
-        
-        # --- Ad Banner & Update Check ---
-        if HAS_PIL:
-            ad_frame = tk.Frame(frame_home, height=120, bg="white")
-            ad_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(0, 10))
-            ad_frame.pack_propagate(False)
-            
-            ad_label = tk.Label(ad_frame, bg="white", cursor="hand2", borderwidth=0, highlightthickness=0)
-            ad_label.pack(fill=tk.BOTH, expand=True)
-            
-            ads_list = []
-            current_ad_idx = [0]
-            is_cycling = [False]
-            last_image_url = [None]
-            
-            def fetch_ads_thread():
-                while ROOT_WINDOW:
-                    try:
-                        import requests
-                        # Use APP_URL if available, otherwise fallback to HOST:PORT
-                        base_url = APP_URL if APP_URL else f"http://{HOST}:{PORT}"
-                        if not base_url.startswith("http"):
-                            base_url = "http://" + base_url
-                        
-                        base_url = base_url.rstrip('/')
-                        
-                        response = requests.get(f"{base_url}/ad.json", timeout=5)
-                        if response.status_code == 200:
-                            data = response.json()
-                            
-                            # --- Update Check ---
-                            server_version = data.get("version", 0)
-                            if server_version > CLIENT_VERSION:
-                                v_name = data.get("version_name", "Unknown")
-                                v_desc = data.get("version_desc", "")
-                                v_url = data.get("version_url", "")
-                                v_q = data.get("version_q", 0)
-                                root.after(0, lambda: show_update_dialog(v_name, v_desc, v_url, v_q))
-                            
-                            # Update Ads
-                            client_ads = data.get("client", [])
-                            if isinstance(client_ads, list) and len(client_ads) > 0:
-                                ads_list.clear()
-                                ads_list.extend(client_ads)
-                                # Only start cycling if not already cycling
-                                if not is_cycling[0]:
-                                    root.after(0, show_next_ad)
-                            else:
-                                root.after(0, lambda: ad_frame.pack_forget())
-                        else:
-                            # If first fetch fails, hide ad frame
-                            if not ads_list:
-                                root.after(0, lambda: ad_frame.pack_forget())
-                    except Exception as e:
-                        print(f"Failed to fetch ads/updates: {e}")
-                        if not ads_list:
-                            root.after(0, lambda: ad_frame.pack_forget())
-                    
-                    # 循环每 3 分钟刷新一次
-                    import time
-                    time.sleep(180)
-
-            def show_next_ad():
-                if not ads_list or not ROOT_WINDOW: 
-                    is_cycling[0] = False
-                    return
-                
-                is_cycling[0] = True
-                idx = current_ad_idx[0]
-                ad = ads_list[idx]
-                image_url = ad.get("imageUrl")
-                click_url = ad.get("clickUrl")
-                
-                # If image_url is the same as last one and only one ad, don't reload
-                if image_url == last_image_url[0] and len(ads_list) == 1:
-                    is_cycling[0] = False # Stop cycling for now, fetch_ads_thread will trigger again
-                    return
-
-                def load_and_display():
-                    try:
-                        import requests
-                        from PIL import Image, ImageTk
-                        import io
-                        
-                        # Only download if different from last one
-                        if image_url != last_image_url[0]:
-                            img_res = requests.get(image_url, timeout=5)
-                            if img_res.status_code == 200:
-                                img_data = img_res.content
-                                image = Image.open(io.BytesIO(img_data))
-                                
-                                # Proportional scaling (Contain)
-                                max_w, max_h = 370, 110 
-                                img_w, img_h = image.size
-                                
-                                resample = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
-                                image.thumbnail((max_w, max_h), resample)
-                                
-                                new_w, new_h = image.size
-                                
-                                final_image = Image.new("RGB", (380, 120), "white")
-                                offset = ((380 - new_w) // 2, (120 - new_h) // 2)
-                                
-                                if image.mode in ('RGBA', 'LA'):
-                                    final_image.paste(image, offset, image)
-                                else:
-                                    final_image.paste(image, offset)
-                                
-                                image = final_image
-                                photo = ImageTk.PhotoImage(image)
-                                last_image_url[0] = image_url
-                            else:
-                                # Skip this one
-                                current_ad_idx[0] = (current_ad_idx[0] + 1) % len(ads_list)
-                                root.after(1000, show_next_ad)
-                                return
-                        else:
-                            # Use existing photo if available (though we don't store it easily here)
-                            # For simplicity, if it's the same URL but we have multiple ads, 
-                            # we still need to show it. But if we don't have the 'photo' object,
-                            # we might need to reload.
-                            # However, if it's the same URL, it's likely the same ad.
-                            pass
-
-                        # If we skipped download because it's the same URL, we still need to update UI
-                        # but we need the 'photo' object. Let's just reload if it's part of a rotation.
-                        # The main fix is for the single-ad case.
-                        
-                        if image_url == last_image_url[0] and 'photo' not in locals():
-                            # Re-download if we don't have the photo object
-                            img_res = requests.get(image_url, timeout=5)
-                            if img_res.status_code == 200:
-                                img_data = img_res.content
-                                image = Image.open(io.BytesIO(img_data))
-                                max_w, max_h = 370, 110 
-                                resample = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
-                                image.thumbnail((max_w, max_h), resample)
-                                new_w, new_h = image.size
-                                final_image = Image.new("RGB", (380, 120), "white")
-                                offset = ((380 - new_w) // 2, (120 - new_h) // 2)
-                                if image.mode in ('RGBA', 'LA'):
-                                    final_image.paste(image, offset, image)
-                                else:
-                                    final_image.paste(image, offset)
-                                image = final_image
-                                photo = ImageTk.PhotoImage(image)
-                                last_image_url[0] = image_url
-
-                        def update_ui():
-                            if not ROOT_WINDOW: return
-                            ad_label.config(image=photo)
-                            ad_label.image = photo
-                            ad_label.bind("<Button-1>", lambda e, url=click_url: open_url(url))
-                            
-                            # Schedule next ONLY if more than 1 ad
-                            if len(ads_list) > 1:
-                                current_ad_idx[0] = (current_ad_idx[0] + 1) % len(ads_list)
-                                root.after(5000, show_next_ad)
-                            else:
-                                is_cycling[0] = False
-                                
-                        root.after(0, update_ui)
-                    except Exception as e:
-                        print(f"Error loading ad image: {e}")
-                        is_cycling[0] = False
-                        if len(ads_list) > 1:
-                            current_ad_idx[0] = (current_ad_idx[0] + 1) % len(ads_list)
-                            root.after(1000, show_next_ad)
-
-                threading.Thread(target=load_and_display, daemon=True).start()
-
-            def open_url(url):
-                if url and url != "#":
-                    import webbrowser
-                    webbrowser.open(url)
-
-            threading.Thread(target=fetch_ads_thread, daemon=True).start()
-        
-        # --- Control Tab ---
-        frame_control = ttk.Frame(notebook)
-        notebook.add(frame_control, text='控制')
-        
-        tk.Label(frame_control, text="控制端网页", font=("Arial", 12, "bold")).pack(pady=(20, 10))
-        tk.Label(frame_control, text="点击下方按钮在浏览器中打开控制端网页即可控制其他设备", justify="center").pack(pady=10)
-        
-        def open_web():
-            url = APP_URL
-            
-            # Add current device info to URL for one-click connection
-            clean_id = DEVICE_ID.replace(" ", "")
-            if url.endswith("/"):
-                url = url[:-1]
-            url += f"?deviceId={clean_id}&password={DEVICE_PASSWORD}&autostart=true"
-            
-            webbrowser.open(url)
-            
-        ttk.Button(frame_control, text="打开控制端网页", command=open_web).pack(pady=10)
-        
-        # --- Settings Tab ---
-        frame_settings = ttk.Frame(notebook)
-        notebook.add(frame_settings, text='设置')
-        
-        # Server Config Section
-        tk.Label(frame_settings, text="服务器配置", font=("Arial", 12, "bold")).pack(pady=(10, 5))
-        
-        server_frame = ttk.Frame(frame_settings)
-        server_frame.pack(pady=5)
-        
-        tk.Label(server_frame, text="服务器地址:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        host_entry = ttk.Entry(server_frame, width=25)
-        host_entry.insert(0, HOST)
-        host_entry.grid(row=0, column=1, sticky="w", padx=5, pady=2)
-        
-        tk.Label(server_frame, text="端口:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        port_entry = ttk.Entry(server_frame, width=10)
-        port_entry.insert(0, str(PORT))
-        port_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        
-        tk.Label(server_frame, text="协议:").grid(row=2, column=0, sticky="e", padx=5, pady=2)
-        protocol_var = tk.StringVar(value=PROTOCOL)
-        protocol_combo = ttk.Combobox(server_frame, textvariable=protocol_var, values=["ws", "wss"], width=8, state="readonly")
-        protocol_combo.grid(row=2, column=1, sticky="w", padx=5, pady=2)
-        
-        def save_server_settings():
-            global HOST, PORT, PROTOCOL
-            new_host = host_entry.get().strip()
-            new_port = port_entry.get().strip()
-            new_protocol = protocol_var.get()
-            
-            if not new_host:
-                messagebox.showerror("错误", "服务器地址不能为空")
-                return
-            
-            try:
-                # Update global variables
-                HOST = new_host
-                PORT = new_port
-                PROTOCOL = new_protocol
-                
-                # Save to file
-                config_dir = SYSTEM_AUTH_DIR
-                config_file = os.path.join(config_dir, "server.json")
-                os.makedirs(config_dir, exist_ok=True)
-                with open(config_file, "w") as f:
-                    import json
-                    json.dump({"host": HOST, "port": PORT, "protocol": PROTOCOL}, f)
-                
-                messagebox.showinfo("成功", "服务器配置已保存，将在下次重连时生效。")
-            except Exception as e:
-                messagebox.showerror("错误", f"保存失败: {e}")
-                
-        ttk.Button(frame_settings, text="保存配置", command=save_server_settings).pack(pady=5)
-        
-        ttk.Separator(frame_settings, orient='horizontal').pack(fill='x', padx=20, pady=10)
-        
-        tk.Label(frame_settings, text="系统服务管理", font=("Arial", 12, "bold")).pack(pady=(5, 5))
-        
-        def on_install_service():
-            if not is_admin():
-                if messagebox.askyesno("权限不足", "安装系统服务需要管理员权限。是否尝试立即提升权限？"):
-                    elevate_process()
-                return
-            
-            # 与首页功能保持一致：安装驱动及服务并提示重启
-            install_msg = "安装驱动及服务" if not HAS_INTERCEPTION and SHOW_SERVICE_WARNING else ("安装驱动" if not HAS_INTERCEPTION else "注册服务")
-            if messagebox.askyesno(install_msg, f"{install_msg}需要管理员权限，并会在完成后重启电脑。是否继续？"):
-                install_interception_driver()
-                    
-        def on_uninstall_service():
-            if not is_admin():
-                if messagebox.askyesno("权限不足", "卸载系统服务需要管理员权限。是否尝试立即提升权限？"):
-                    elevate_process()
-                return
-            if messagebox.askyesno("卸载服务", "确定要卸载系统服务吗？\n卸载完成后当前程序将退出，请重新手动运行。"):
-                if uninstall_windows_service():
-                    messagebox.showinfo("成功", "系统服务卸载成功！程序即将退出。")
-                    root.destroy()
-                    os._exit(0)
-                else:
-                    messagebox.showerror("失败", "系统服务卸载失败，请检查日志。")
-                    
-        btn_frame = ttk.Frame(frame_settings)
-        btn_frame.pack(pady=10)
-        
-        ttk.Button(btn_frame, text="安装为系统服务", command=on_install_service).grid(row=0, column=0, padx=10)
-        ttk.Button(btn_frame, text="卸载系统服务", command=on_uninstall_service).grid(row=0, column=1, padx=10)
-        
-        def update_ui():
-            # Keep password label in sync
-            try:
-                if pwd_label.cget("text") != DEVICE_PASSWORD:
-                    pwd_label.config(text=DEVICE_PASSWORD)
-            except: pass
-
-            if SERVER_CONNECTED:
-                conn_label.config(text="服务器状态: 已连接", fg="green")
-            else:
-                conn_label.config(text="服务器状态: 未连接", fg="red")
-                
-            if STREAM_RUNNING or VIEWER_COUNT > 0:
-                ctrl_label.config(text=f"控制状态: 正在被控制 ({VIEWER_COUNT}个控制端)", fg="red")
-            else:
-                ctrl_label.config(text="", fg="green")
-                
-            root.after(1000, update_ui)
-            
-        root.after(1000, update_ui)
-        
-        def on_close():
-            global TRAY_ICON
-            should_tray = CLIENT_SETTINGS.get("trayIcon", True)
-            if should_tray and HAS_PYSTRAY:
-                root.withdraw() # Hide window to tray
-                if not TRAY_ICON:
-                    threading.Thread(target=create_tray_icon, daemon=True).start()
-            else:
-                if messagebox.askokcancel("退出", "确定要退出客户端吗？"):
-                    root.destroy()
-                    os._exit(0)
-        
-        root.protocol("WM_DELETE_WINDOW", on_close)
-        root.mainloop()
-    except Exception as e:
-        print(f"[-] Local UI Error: {e}")
 
 def connect(role="service"):
     global WS_CLIENT, CLIENT_ROLE
     CLIENT_ROLE = role
     
-    # Start local UI if on PC and role is desktop or portable
-    # Only start native Tkinter UI if webview is not available or disabled
-    use_webview = HAS_WEBVIEW and "--no-ui" not in sys.argv
-    if PLATFORM_MODE == "pc" and HAS_TKINTER and role in ["desktop", "portable"] and not use_webview:
-        # Check if already running to avoid leaks
-        ui_thread_exists = any(t.name == "Local-UI" for t in threading.enumerate())
-        if not ui_thread_exists:
-            threading.Thread(target=start_local_ui, name="Local-UI", daemon=True).start()
-
     # Start stream worker thread if screen module is enabled and role is desktop or portable
     if "screen" in ENABLED_MODULES and role in ["desktop", "portable"]:
         stream_thread_exists = any(t.name == "Stream-Worker" for t in threading.enumerate())
@@ -6536,7 +5726,7 @@ class RootDeskBridge:
         return {"success": True}
 
     def open_web_console(self):
-        """Expose open_web logic to webview UI"""
+        """打开 Web 控制台"""
         try:
             url = APP_URL
             
@@ -6551,7 +5741,6 @@ class RootDeskBridge:
             return {"success": True}
         except Exception as e:
             print(f"[Bridge] open_web error: {e}")
-            # 弹框提示 打开地址失败
             return {"success": False, "error": str(e)}
 
     def update_setting(self, key, value):
@@ -6579,7 +5768,9 @@ class RootDeskBridge:
 
     def connect_to_remote(self, remoteId, remotePassword):
         try:
-            connect(remoteId, remotePassword)
+            import webbrowser
+            url = f"{APP_URL}/?deviceId={str(remoteId).replace(' ', '')}&password={remotePassword}&autostart=true"
+            webbrowser.open(url)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -6637,11 +5828,17 @@ class RootDeskBridge:
             print(f"[Bridge] 检查更新: {base_url}/ad.json")
             
             response = requests.get(f"{base_url}/ad.json", timeout=10)
+            print(f"[Bridge] 服务器响应状态码: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
+                print(f"[Bridge] 接口返回数据: {data}")
                 try:
+                    # 仅使用纯数字版本号进行比对
                     server_version = int(data.get("version", 0))
-                except:
+                    print(f"[Bridge] 转换后的服务器版本号: {server_version}, 当前本地版本号: {CLIENT_VERSION}")
+                except Exception as e:
+                    print(f"[Bridge] 版本号转换失败: {e}")
                     server_version = 0
                     
                 if server_version > CLIENT_VERSION:
@@ -6662,10 +5859,9 @@ class RootDeskBridge:
             return {"success": False, "error": str(e)}
 
     def start_update_process(self, url):
-        """启动更新下载和执行过程 - 使用原有的 Tkinter 更新逻辑"""
+        """启动更新下载和执行过程"""
         try:
             import threading
-            # 直接调用全局的 perform_update，它会弹出一个 Tkinter 进度窗口
             threading.Thread(target=lambda: perform_update(url), daemon=True).start()
             return {"success": True}
         except Exception as e:
@@ -6774,58 +5970,46 @@ class RootDeskBridge:
             print(f"[Bridge] 设置密码失败: {e}")
             return {"success": False, "error": str(e)}
 
-def start_webview_ui():
-    """启动 WebView UI 界面"""
-    global WEBVIEW_WINDOW
-    if not HAS_WEBVIEW:
-        if HAS_TKINTER:
-            print("[*] WebView2 不可用，切换至原生 UI")
-            start_local_ui()
-        return
+# 全局 UI 窗口引用
+MAIN_WINDOW = None
 
-    if WEBVIEW_WINDOW:
-        return
-
-    # 增加锁屏检测：如果当前处于锁屏界面，WebView2 初始化会失败 (0x80080005)
-    # 我们在这里等待直到解锁
-    if platform.system() == "Windows":
-        try:
-            lock_wait_count = 0
-            while is_session_locked(-1): # -1 表示当前会话
-                if lock_wait_count % 5 == 0:
-                    print("[*] 正在等待屏幕解锁以启动 UI...")
-                lock_wait_count += 1
-                time.sleep(1)
-        except:
-            pass
-
-    # In bundled mode, resources are in 'library' folder next to executable or in sys._MEIPASS
-    if getattr(sys, 'frozen', False):
-        base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
+def start_pyqt_ui():
+    """启动 PyQt5 原生 UI (线程安全)"""
+    global MAIN_WINDOW
+    try:
+        from client_ui_pyqt import MainWindow
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import QTimer
         
-    ui_path = os.path.join(base_path, 'library', 'client-ui', 'index.html')
-    # Fallback for development if index.html is in lib/client-ui
-    if not os.path.exists(ui_path):
-        ui_path = os.path.join(base_path, 'lib', 'client-ui', 'index.html')
-
-    bridge = RootDeskBridge()
-    print(f"[*] 启动 WebView UI: {ui_path}")
-    # 禁用 WebView2 的后台任务，防止触发 360 的 BITS 任务报警
-    if platform.system() == "Windows":
-        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
-            "--disable-background-networking "
-            "--disable-component-update "
-            "--disable-background-timer-throttling "
-            "--disable-features=AutofillServerCommunication "
-            "--disable-sync "
-            "--metrics-recording-only"
-        )
-        print("[*] 已配置 WebView2 参数以禁用后台任务")
-    WEBVIEW_WINDOW = webview.create_window(f'RootDesk v{CLIENT_VERSION_NAME}', url=ui_path, js_api=bridge, width=1124, height=768)
-    WEBVIEW_WINDOW.events.closing += on_webview_closing
-    webview.start()
+        app = QApplication.instance()
+        if not app:
+            # 必须在主线程创建 QApplication
+            if threading.current_thread() is not threading.main_thread():
+                print("[!] Cannot create QApplication from non-main thread.")
+                return
+            app = QApplication(sys.argv)
+            
+        if not MAIN_WINDOW:
+            if threading.current_thread() is not threading.main_thread():
+                print("[!] Cannot create MainWindow from non-main thread.")
+                return
+            bridge = RootDeskBridge()
+            MAIN_WINDOW = MainWindow(bridge)
+            
+        # 线程安全地显示窗口
+        if threading.current_thread() is threading.main_thread():
+            MAIN_WINDOW.show_window()
+        else:
+            # 使用 QTimer 跨线程安全唤起 UI
+            QTimer.singleShot(0, MAIN_WINDOW.show_window)
+        
+        # 仅当作为主线程运行时才进入事件循环
+        if threading.current_thread() is threading.main_thread():
+            sys.exit(app.exec_())
+    except Exception as e:
+        print(f"[-] 启动 PyQt5 UI 失败: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     # 0. Initialize password and server config management
@@ -6919,13 +6103,7 @@ if __name__ == "__main__":
             else:
                 print("[!] Warning: Service installation requested but not running as Administrator.")
                 # 尝试立即提升权限以安装服务
-                if HAS_TKINTER:
-                    from tkinter import messagebox
-                    if messagebox.askyesno("权限请求", "您在配置中开启了'安装为系统服务'，这需要管理员权限。 是否立即提升权限以完成安装？"):
-                        elevate_process()
-                else:
-                    # 命令行模式下尝试直接提升
-                    elevate_process()
+                elevate_process()
         
         # Start command queue listener
         threading.Thread(target=check_local_commands_loop, daemon=True).start()
@@ -6967,32 +6145,19 @@ if __name__ == "__main__":
                 sys.exit(0)
             print(f"[*] RootDesk Client - {REMARK} (UI Mode - Service is running)")
             
-            # 如果支持 WebView 且未指定禁用，则启动
-            if HAS_WEBVIEW and "--no-ui" not in sys.argv:
-                # 启动后台连接线程
-                def bg_connect():
-                    while True:
-                        try:
-                            connect(role="desktop")
-                        except: pass
-                        time.sleep(RECONNECT_INTERVAL)
-                threading.Thread(target=bg_connect, daemon=True).start()
-                start_webview_ui()
-            else:
-                # Main Loop (Desktop logic - Console version)
-                try:
-                    while True:
-                        try:
-                            connect(role="desktop")
-                        except Exception as e:
-                            print(f"[-] Connection error: {e}")
-                        time.sleep(RECONNECT_INTERVAL)
-                except KeyboardInterrupt:
-                    print("[*] Exiting...")
-                    sys.exit(0)
-                except Exception as e:
-                    print(f"[-] Fatal error: {e}")
-                    sys.exit(1)
+            # 启动系统托盘
+            if CLIENT_SETTINGS.get("trayIcon", True):
+                threading.Thread(target=create_tray_icon, daemon=True).start()
+
+            # 启动后台连接线程
+            def bg_connect():
+                while True:
+                    try:
+                        connect(role="desktop")
+                    except: pass
+                    time.sleep(RECONNECT_INTERVAL)
+            threading.Thread(target=bg_connect, daemon=True).start()
+            start_pyqt_ui()
         else:
             # Portable mode: Run both Service and UI in this session
             if not check_single_instance(is_ui=False): sys.exit(0)
@@ -7000,34 +6165,20 @@ if __name__ == "__main__":
             
             print(f"[*] RootDesk Client - {REMARK} (Portable Mode)")
             
+            # 启动系统托盘
+            if CLIENT_SETTINGS.get("trayIcon", True):
+                threading.Thread(target=create_tray_icon, daemon=True).start()
+
             # Start command queue listener for portable mode too
             threading.Thread(target=check_local_commands_loop, daemon=True).start()
             
-            # 如果支持 WebView 且未指定禁用，则启动
-            if HAS_WEBVIEW and "--no-ui" not in sys.argv:
-                # 启动后台连接线程
-                def bg_connect_portable():
-                    while True:
-                        try:
-                            become_interactive()
-                            connect(role="portable")
-                        except: pass
-                        time.sleep(RECONNECT_INTERVAL)
-                threading.Thread(target=bg_connect_portable, daemon=True).start()
-                start_webview_ui()
-            else:
-                # Main Loop (Portable logic - Console version)
-                try:
-                    while True:
-                        try:
-                            become_interactive()
-                            connect(role="portable")
-                        except Exception as e:
-                            print(f"[-] Connection error: {e}")
-                        time.sleep(RECONNECT_INTERVAL)
-                except KeyboardInterrupt:
-                    print("[*] Exiting...")
-                    sys.exit(0)
-                except Exception as e:
-                    print(f"[-] Fatal error: {e}")
-                    sys.exit(1)
+            # 启动后台连接线程
+            def bg_connect_portable():
+                while True:
+                    try:
+                        become_interactive()
+                        connect(role="portable")
+                    except: pass
+                    time.sleep(RECONNECT_INTERVAL)
+            threading.Thread(target=bg_connect_portable, daemon=True).start()
+            start_pyqt_ui()

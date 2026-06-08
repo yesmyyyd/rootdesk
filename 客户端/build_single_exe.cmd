@@ -1,0 +1,26 @@
+python -m PyInstaller -F -w ^
+ --add-data "library;library" ^
+ --add-data "icon.ico;." ^
+ --collect-all av ^
+ --collect-all aiortc ^
+ --collect-all pystray ^
+ --exclude-module PyQt5.QtWebEngine ^
+ --exclude-module PyQt5.QtWebEngineCore ^
+ --exclude-module PyQt5.QtWebEngineWidgets ^
+ --exclude-module PyQt5.QtWebKit ^
+ --exclude-module PyQt5.QtWebKitWidgets ^
+ --exclude-module PyQt5.QtBluetooth ^
+ --exclude-module PyQt5.QtDBus ^
+ --exclude-module PyQt5.QtLocation ^
+ --exclude-module PyQt5.QtMultimedia ^
+ --exclude-module PyQt5.QtNfc ^
+ --exclude-module PyQt5.QtPositioning ^
+ --exclude-module PyQt5.QtRemoteObjects ^
+ --exclude-module PyQt5.QtSensors ^
+ --exclude-module PyQt5.QtSerialPort ^
+ --exclude-module PyQt5.QtSql ^
+ --exclude-module PyQt5.QtTest ^
+ --exclude-module PyQt5.QtXml ^
+ --hidden-import PIL._tkinter_finder ^
+ --uac-admin ^
+ -i icon.ico client.py
