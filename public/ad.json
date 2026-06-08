@@ -1,9 +1,9 @@
 {
-  "downloadUrl": "https://wwanu.lanzoue.com/iOvcF3q2mhpg",
-  "version": 5,
-  "version_name": "1.0.5",
-  "version_desc": "1新增支持横竖屏\n2新增虚拟游戏按键",
-  "version_url": "https://rootdesk.cn/download/RootDesk1.0.5.exe",
+  "downloadUrl": "https://rootdesk.cn/download/RootDesk1.0.6.exe",
+  "version": 6,
+  "version_name": "1.0.6",
+  "version_desc": "1界面重构改用QT5 \n2键盘界面新增快捷键可自定义快捷键\n3改为安装包方式安装",
+  "version_url": "https://rootdesk.cn/download/RootDesk1.0.6.exe",
   "version_q": 0,
   "remote": [
     {
