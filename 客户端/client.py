@@ -42,8 +42,8 @@ SINGLE_INSTANCE = "True"
 INSTALL_AS_SERVICE = False
 
 # --- 当前版本 ---
-CLIENT_VERSION = 1
-CLIENT_VERSION_NAME = "1.0.5"
+CLIENT_VERSION = 6
+CLIENT_VERSION_NAME = "1.0.6"
 
 
 # --- 屏幕传输性能与阈值配置 ---

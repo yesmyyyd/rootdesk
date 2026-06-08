@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-python -m PyInstaller -D -c -n rootdesk -y ^
+python -m PyInstaller -D -w -n rootdesk -y ^
  --add-data "library;library" ^
  --collect-all av ^
  --collect-all aiortc ^
