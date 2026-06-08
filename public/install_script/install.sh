@@ -88,7 +88,7 @@ max-port=65535
 
 log-file=/var/log/turnserver.log
 simple-log
-stale-nonce=600
+
 EOF
 
 # 创建系统服务

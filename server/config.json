@@ -1,5 +1,5 @@
 {
-  "TURN_URL": "turn:121.196.154.6:3478",
-  "TURN_SECRET": "yesmyyyd",
-  "STUN_URL": "stun:121.196.154.6:3478"
+  "TURN_URL": "turn:127.0.0.1:3478",
+  "TURN_SECRET": "",
+  "STUN_URL": "stun:127.0.0.1:3478"
 }
