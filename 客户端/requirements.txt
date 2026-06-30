@@ -1,0 +1,76 @@
+# ==================== aiortc 及其核心依赖 (必须锁定版本！) ====================
+aiortc==1.9.0
+aioice==0.9.0
+cryptography==47.0.0
+pyOpenSSL==26.2.0
+av==12.3.0
+pylibsrtp==0.10.0
+opuslib==3.0.1
+ifaddr==0.2.0
+wsproto==1.1.0
+typing_extensions==4.13.2
+
+# ==================== 屏幕捕捉和视频处理 ====================
+dxcam==0.0.5
+mss==9.0.2
+numpy==1.24.4
+pillow==10.4.0
+opencv-python==4.13.0.92
+
+# ==================== 系统控制 (键鼠等) ====================
+PyAutoGUI==0.9.54
+MouseInfo==0.1.3
+PyGetWindow==0.0.9
+PyMsgBox==2.0.1
+PyRect==0.2.0
+PyScreeze==1.0.1
+pytweening==1.2.0
+psutil==7.2.2
+PyAudio==0.2.14
+
+# ==================== UI 和系统托盘 ====================
+PyQt5==5.15.11
+PyQt5-Qt5==5.15.2
+PyQt5_sip==12.15.0
+pystray==0.19.5
+pywebview==6.2.1
+QtAwesome==1.4.2
+QtPy==2.4.3
+customtkinter==5.2.2
+darkdetect==0.8.0
+
+# ==================== 网络和通信 ====================
+websocket-client==1.8.0
+requests==2.32.4
+certifi==2026.2.25
+urllib3==2.2.3
+idna==3.11
+charset-normalizer==3.4.6
+
+# ==================== 系统相关 (Windows) ====================
+pywin32==301
+pywin32-ctypes==0.2.3
+comtypes==1.4.12
+pythonnet==3.0.5
+pydivert==2.1.0
+
+# ==================== 工具库 ====================
+cffi==1.17.1
+pycparser==2.23
+six==1.17.0
+packaging==26.0
+importlib_metadata==8.5.0
+importlib_resources==6.4.5
+zipp==3.20.2
+colorama==0.4.6
+
+# ==================== 可选：打包相关 (如果需要打包成 exe) ====================
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.3
+altgraph==0.17.5
+pefile==2024.8.26
+
+# ==========================================
+# 安装命令：
+# pip install -r requirements.txt
+# ==========================================

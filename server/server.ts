@@ -328,7 +328,7 @@ app.prepare().then(() => {
         
         // Handle dynamic TURN configuration request
         if (data.type === 'get_turn_config') {
-          const { deviceId, password } = data;
+          const { deviceId, password, clientId } = data;
           const targetDevice = devices.get(deviceId);
           
           // Verify password
@@ -345,15 +345,32 @@ app.prepare().then(() => {
           const turnUrl = config.TURN_URL;
           const stunUrl = config.STUN_URL;
           
+          if (!secret) {
+            console.error('[WebRTC] Error: TURN_SECRET is not configured in config.json');
+          }
+          
           const timestamp = Math.floor(Date.now() / 1000) + 24 * 3600;
           const username = `${timestamp}:yyds`;
-          const turnPassword = crypto.createHmac('sha1', secret).update(username).digest('base64');
+          const turnPassword = crypto.createHmac('sha1', secret || '').update(username).digest('base64');
+          
+          console.log(`[WebRTC] Generated credentials for user: ${username}`);
           
           const iceServers = [
-            { urls: turnUrl, username, credential: turnPassword },
-            { urls: stunUrl },
-            { urls: 'stun:stun.l.google.com:19302' }
+            // 首选：用户自定义的 TURN (UDP + TCP)
+            { urls: [turnUrl], username, credential: turnPassword },
+            { urls: [`${turnUrl}?transport=tcp`], username, credential: turnPassword },
+            
+            // 备选：国内顶级 STUN (阿里云、腾讯云、百度、华为)
+            // { urls: ["stun:stun.aliyun.com:3478"] },
+            // { urls: ["stun:stun.tencentyun.com:3478"] },
+            // { urls: ["stun:stun.baidu.com:3478"] },
+            // { urls: ["stun:stun.huaweicloud.com:3478"] }
           ];
+          
+          // 如果有额外的 STUN 配置也加入
+          if (stunUrl && stunUrl !== turnUrl) {
+            iceServers.push({ urls: [stunUrl] });
+          }
 
           // Simple XOR encryption using device password
           const jsonStr = JSON.stringify(iceServers);
@@ -365,6 +382,7 @@ app.prepare().then(() => {
           
           ws.send(JSON.stringify({
             type: 'turn_config',
+            clientId: clientId,
             encryptedData: encrypted.toString('base64')
           }));
           return;

@@ -67,9 +67,8 @@ import { Progress } from "@/components/ui/progress"
 import { DeviceInfo } from "./device-list"
 import { useWebSocket } from "@/components/websocket-provider"
 import { useNotification } from "@/components/ui/custom-notification"
-import { OpusDecoder } from "opus-decoder"
 import { ChatPanel } from "./chat-panel"
-import pako from 'pako'
+import { StreamScreen, StreamScreenRef } from "./stream-screen"
 import { KeymapEditor, KeymapCanvas, EditorProvider, KeymapToolbar, KeymapProperties, KeymapKeyboardOverlay } from "@/components/keymap"
 import { VirtualKeyboard } from "@/components/keymap/virtual-keyboard"
 import { useKeymapStore } from "@/components/keymap/use-keymap-store"
@@ -263,40 +262,50 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const { socket, isConnected, sendCommand, lastMessage, getTurnConfig } = useWebSocket()
   console.log("[StreamView] Component rendered, device:", device.id);
   const { notify } = useNotification()
-  const [fullscreen, setFullscreen] = useState(false)
+  
+  // All refs at the top
   const rootRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const screenRef = useRef<StreamScreenRef>(null)
+  const hiddenInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const activeTouchIdRef = useRef<number | null>(null)
+  const lastTouchTime = useRef<number>(0)
+  const lastTouchPos = useRef<{ x: number, y: number } | null>(null)
+  const lastClickTime = useRef<number>(0)
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const isLongPressActive = useRef<boolean>(false)
+  const virtualMousePosRef = useRef({ x: 100, y: 200 })
+  const vMouseDragOffset = useRef({ x: 0, y: 0 })
+  const edgePanRaf = useRef<number | null>(null)
+  const edgePanVelocity = useRef({ x: 0, y: 0 })
+  const prevPerformanceRef = useRef<any>(null)
+  const prevTimeRef = useRef<number>(0)
+  const audioTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const cancelledUploads = useRef<Set<string>>(new Set())
+
+  const [fullscreen, setFullscreen] = useState(false)
   const [mouseMode, setMouseMode] = useState(true)
   // Window mode defaults to API click (no interception), Screen mode defaults to interception
   const [useInterception, setUseInterception] = useState(mode !== 'window')
   const [showUnlockDialog, setShowUnlockDialog] = useState(false)
-  const [isLocked, setIsLocked] = useState(false)
-  const [hasInterception, setHasInterception] = useState<boolean | null>(null)
   const [unlockPassword, setUnlockPassword] = useState("")
 
-  useEffect(() => {
-    if (hasInterception === false) {
-      setUseInterception(false);
-    }
-  }, [hasInterception]);
   const [keyboardMode, setKeyboardMode] = useState(true)
   const [targetFps, setTargetFps] = useState([30])
   const [quality, setQuality] = useState([80])
   const [streamScale, setStreamScale] = useState([0.7])
   const [compress, setCompress] = useState(true)
   const [useWebP, setUseWebP] = useState(true)
-  const [fps, setFps] = useState(0)
-  const [latency, setLatency] = useState<number | null>(null)
   const lastPingTimeRef = useRef<number | null>(null)
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 })
-  const [cursorStyle, setCursorStyle] = useState<string>("default")
-  const [imageSrc, setImageSrc] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
   const [interactionMode, setInteractionMode] = useState<"touch" | "mouse">("touch")
   const [showVirtualMouse, setShowVirtualMouse] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 })
-  const [originalSize, setOriginalSize] = useState<{ width: number, height: number } | null>(null)
   
   const [isLandscape, setIsLandscape] = useState(false)
   
@@ -314,7 +323,6 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   }, [fullscreen, isLandscape])
 
   const [showTextInput, setShowTextInput] = useState(false)
-  const hiddenInputRef = useRef<HTMLInputElement>(null)
   const [realtimeSyncValue, setRealtimeSyncValue] = useState(" ")
   const [customHotkeys, setCustomHotkeys] = useState<{label: string, keys: string[]}[]>([])
   const [isAddingHotkey, setIsAddingHotkey] = useState(false)
@@ -363,10 +371,6 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     setNewHotkeyKeys([]);
   }
 
-  const [isReceivingAudio, setIsReceivingAudio] = useState(false)
-  
-  const audioTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  
   const [privacyScreen, setPrivacyScreen] = useState(false)
   const [privacyMessage, setPrivacyMessage] = useState("系统维护中，请稍候...")
   const [showPrivacyDialog, setShowPrivacyDialog] = useState(false)
@@ -375,15 +379,41 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   const [unreadChatCount, setUnreadChatCount] = useState(0)
   const [openDropdownIdx, setOpenDropdownIdx] = useState<number | null>(null)
   
-  // WebRTC state
+  const handleRefresh = useCallback(() => {
+    screenRef.current?.handleRefresh();
+  }, []);
+
+  const sendInput = useCallback((action: string, data: any) => {
+    screenRef.current?.sendInput(action, data);
+  }, []);
+
+  const sendHotkey = useCallback((keys: string[]) => {
+    screenRef.current?.sendHotkey(keys);
+  }, []);
+
+  const getRealPos = useCallback((vMouseX: number, vMouseY: number) => {
+    return screenRef.current?.getRealPos(vMouseX, vMouseY) || { x: 0, y: 0 };
+  }, []);
+
+  // Stream state (synchronized from StreamScreen)
   const [webrtcState, setWebrtcState] = useState<"connecting" | "connected" | "failed" | "none">("none")
   const [connectionType, setConnectionType] = useState<'internal' | 'external' | null>(null)
-  const [reconnectTrigger, setReconnectTrigger] = useState(0)
-  const [reconnectCount, setReconnectCount] = useState(0)
-  const rtcPcRef = useRef<RTCPeerConnection | null>(null)
-  const rtcDcRef = useRef<RTCDataChannel | null>(null)
+  const [fps, setFps] = useState(0)
+  const [latency, setLatency] = useState<number | null>(null)
+  const [originalSize, setOriginalSize] = useState<{ width: number, height: number } | null>(null)
+  const [isLocked, setIsLocked] = useState(false)
+  const [hasInterception, setHasInterception] = useState<boolean | null>(null)
+  const [cursorStyle, setCursorStyle] = useState<string>("default")
+  const [isReceivingAudio, setIsReceivingAudio] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string | null>(null)
   const [rtcMessage, setRtcMessage] = useState<any>(null)
   
+  useEffect(() => {
+    if (hasInterception === false) {
+      setUseInterception(false);
+    }
+  }, [hasInterception]);
+
   // Power control confirmation state
   const [powerConfirm, setPowerConfirm] = useState<{
     show: boolean;
@@ -400,241 +430,20 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   // File upload state
   const [uploadProgress, setUploadProgress] = useState<{ [transferId: string]: number }>({})
   const [activeUploads, setActiveUploads] = useState<{ id: string, filename: string }[]>([])
-  const cancelledUploads = useRef<Set<string>>(new Set())
 
   // Keymap state
   const [isEditingKeymap, setIsEditingKeymap] = useState(false)
   const [keymapConfig, setKeymapConfig] = useState<any>(null)
   const { configs: savedKeymaps, saveConfig: saveKeymapToStore, deleteConfig: deleteKeymapFromStore, exportConfig, importConfig } = useKeymapStore()
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDraggingNode, setIsDraggingNode] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [showKeymapProperties, setShowKeymapProperties] = useState(false)
   const [executingNodeId, setExecutingNodeId] = useState<string | null>(null)
-  const activeTouchIdRef = useRef<number | null>(null)
 
   const crosshairNode = useMemo(() => {
     return keymapConfig?.nodes?.find((n: any) => n.type === 'crosshair');
   }, [keymapConfig]);
   
-  // WebRTC Setup
-  useEffect(() => {
-    let pc: RTCPeerConnection | null = null;
-    let dc: RTCDataChannel | null = null;
-    let isMounted = true;
-
-    const initWebRTC = async () => {
-      if (!isConnected) {
-        console.log("[StreamView] WebRTC waiting for socket connection...");
-        return;
-      }
-      
-      console.log("[StreamView] WebRTC init started");
-      try {
-        setWebrtcState("connecting");
-
-        // Fetch dynamic TURN config
-        let iceServers = [];
-        try {
-          iceServers = await getTurnConfig(device.id, device.password || "");
-          if (!isMounted) return;
-          console.log("[WebRTC] Dynamic TURN config received and decrypted");
-        } catch (e) {
-          if (!isMounted) return;
-          console.warn("[WebRTC] Failed to fetch dynamic TURN config, using fallback", e);
-          iceServers = [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' }
-          ];
-        }
-
-        pc = new RTCPeerConnection({ iceServers });
-        rtcPcRef.current = pc;
-
-        // Create DataChannel
-        dc = pc.createDataChannel("stream", {
-          ordered: true
-        });
-        rtcDcRef.current = dc;
-
-        dc.onopen = () => {
-          console.log("[WebRTC] DataChannel opened");
-          dc.binaryType = 'arraybuffer';
-          setWebrtcState("connected");
-          setReconnectCount(0); // Reset retry count on successful connection
-        };
-
-        dc.onclose = () => {
-          console.log("[WebRTC] DataChannel closed");
-          setWebrtcState("failed");
-        };
-
-        dc.onerror = (e) => {
-          console.error("[WebRTC] DataChannel error:", e);
-          setWebrtcState("failed");
-        };
-
-        // Handle incoming messages from DataChannel
-        dc.onmessage = async (event) => {
-          try {
-            if (typeof event.data === 'string') {
-                try {
-                    const parsed = JSON.parse(event.data);
-                    // Add deviceId if missing, as it's coming from this specific device
-                    if (!parsed.deviceId) parsed.deviceId = device.id;
-                    setRtcMessage(parsed);
-                } catch (e) {
-                    console.error("[WebRTC] Failed to parse string message:", e);
-                }
-            } else {
-                // Binary data from Python client
-                // The Python client sends: [msg_type] + [metadata_len] + [metadata_bytes] + [frame_data]
-                // Note: It does NOT inject id_len and device_id like the server does.
-                const uint8Array = new Uint8Array(event.data);
-                
-                if (uint8Array.length > 0) {
-                    const msg_type = uint8Array[0];
-                    
-                    if (msg_type >= 4 && msg_type <= 7) {
-                        let dataToParse = uint8Array.slice(1);
-                        
-                        if (msg_type === 5 || msg_type === 7) {
-                            let decompressed: Uint8Array | null = null;
-                            try { decompressed = pako.inflate(dataToParse); } catch (e) {}
-                            if (!decompressed) { try { decompressed = pako.inflateRaw(dataToParse); } catch (e) {} }
-                            if (!decompressed) { try { decompressed = pako.ungzip(dataToParse); } catch (e) {} }
-                            if (!decompressed) {
-                                try {
-                                    const possibleLen = new DataView(dataToParse.buffer, dataToParse.byteOffset, 4).getUint32(0, false);
-                                    if (possibleLen > 0 && possibleLen < 100000 && dataToParse[4] === 123) {
-                                        const compressedFrame = dataToParse.slice(4 + possibleLen);
-                                        let frameDecompressed: Uint8Array | null = null;
-                                        try { frameDecompressed = pako.inflate(compressedFrame); } catch(e) {}
-                                        if (!frameDecompressed) { try { frameDecompressed = pako.inflateRaw(compressedFrame); } catch(e) {} }
-                                        if (!frameDecompressed) { try { frameDecompressed = pako.ungzip(compressedFrame); } catch(e) {} }
-                                        if (frameDecompressed) {
-                                            decompressed = new Uint8Array(4 + possibleLen + frameDecompressed.length);
-                                            decompressed.set(dataToParse.slice(0, 4 + possibleLen), 0);
-                                            decompressed.set(frameDecompressed, 4 + possibleLen);
-                                        }
-                                    }
-                                } catch (e) {}
-                            }
-                            if (decompressed) {
-                                dataToParse = decompressed;
-                            }
-                        }
-                        
-                        let metadataLen = 0;
-                        let metadataBytes = new Uint8Array(0);
-                        let frameData = dataToParse;
-                        let metadata: any = {};
-                        
-                        try {
-                            if (dataToParse.length > 4) {
-                                const possibleLen = new DataView(dataToParse.buffer, dataToParse.byteOffset, 4).getUint32(0, false);
-                                if (possibleLen > 0 && possibleLen < 100000 && dataToParse.length >= 4 + possibleLen && dataToParse[4] === 123) {
-                                    metadataLen = possibleLen;
-                                    metadataBytes = dataToParse.slice(4, 4 + metadataLen);
-                                    frameData = dataToParse.slice(4 + metadataLen);
-                                    metadata = JSON.parse(new TextDecoder().decode(metadataBytes));
-                                }
-                            }
-                        } catch (e) {
-                            console.warn('[WebRTC] Failed to parse metadata', e);
-                        }
-                        
-                        setRtcMessage({
-                            type: (msg_type === 6 || msg_type === 7) ? 'window_frame' : 'screen_frame',
-                            deviceId: device.id,
-                            metadata: metadata,
-                            data: frameData,
-                            isBinary: true,
-                            compressed: msg_type === 5 || msg_type === 7
-                        });
-                    } else {
-                        const data = uint8Array.slice(1);
-                        let type = 'unknown';
-                        if (msg_type === 1) type = 'screen_frame';
-                        else if (msg_type === 2) type = 'audio_data';
-                        else if (msg_type === 3) type = 'audio_opus';
-                        else if (msg_type === 8) type = 'window_frame';
-                        
-                        setRtcMessage({
-                            type: type,
-                            deviceId: device.id,
-                            data: data,
-                            isBinary: true
-                        });
-                    }
-                }
-            }
-          } catch (e) {
-            console.error("[WebRTC] Error processing message:", e);
-          }
-        };
-
-        pc.oniceconnectionstatechange = () => {
-          if (!isMounted) return;
-          console.log("[WebRTC] !!! ICE State changed to:", pc?.iceConnectionState);
-          if (pc?.iceConnectionState === "failed") {
-            setWebrtcState("failed");
-            // If it failed, try to reconnect after a short delay
-            // Limit to 3 automatic retries to avoid infinite loops
-            if (reconnectCount < 3) {
-              console.log(`[WebRTC] Connection failed, scheduling automatic reconnect (${reconnectCount + 1}/3)...`);
-              setTimeout(() => {
-                if (isMounted) {
-                  setReconnectCount(prev => prev + 1);
-                  setReconnectTrigger(prev => prev + 1);
-                }
-              }, 3000);
-            } else {
-              console.warn("[WebRTC] Max reconnect attempts reached");
-            }
-          } else if (pc?.iceConnectionState === "disconnected" || pc?.iceConnectionState === "closed") {
-            setWebrtcState("failed");
-          }
-        };
-
-        pc.onicecandidate = (event) => {
-          console.log("[WebRTC] ICE Candidate generated:", event.candidate ? "Yes" : event.candidate);
-          if (event.candidate) {
-            sendCommand(device.id, device.password || "", "webrtc_ice_candidate", {
-              candidate: event.candidate.toJSON()
-            });
-          }
-        };
-
-        const offer = await pc.createOffer();
-        console.log("[WebRTC] Offer created");
-        await pc.setLocalDescription(offer);
-        console.log("[WebRTC] Local description set");
-
-        sendCommand(device.id, device.password || "", "webrtc_offer", {
-          sdp: pc.localDescription?.sdp
-        });
-        console.log("[WebRTC] Offer sent to server");
-
-      } catch (e) {
-        console.error("[WebRTC] Setup error:", e);
-        setWebrtcState("failed");
-      }
-    };
-
-    initWebRTC();
-
-    return () => {
-      isMounted = false;
-      if (dc) dc.close();
-      if (pc) pc.close();
-      rtcPcRef.current = null;
-      rtcDcRef.current = null;
-      setWebrtcState("none");
-    };
-  }, [device.id, sendCommand, device.password, reconnectTrigger, isConnected]);
-
   // Fullscreen handling
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -668,47 +477,29 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
   // Audio state
   const [listenAudio, setListenAudio] = useState(false)
   const [speakAudio, setSpeakAudio] = useState(false)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const opusDecoderRef = useRef<OpusDecoder | null>(null)
-  const [opusReady, setOpusReady] = useState(false)
-  const nextPlayTimeRef = useRef<number>(0)
-  const mediaStreamRef = useRef<MediaStream | null>(null)
-  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
 
   // Touch handling state
   const [touchStartDist, setTouchStartDist] = useState<number>(0)
   const [touchStartZoom, setTouchStartZoom] = useState<number>(1)
   const [isPanning, setIsPanning] = useState(false)
-  const lastTouchTime = useRef<number>(0)
-  const lastTouchPos = useRef<{ x: number, y: number } | null>(null)
-  const lastClickTime = useRef<number>(0)
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const isLongPressActive = useRef<boolean>(false)
 
   const [virtualMousePos, setVirtualMousePos] = useState({ x: 100, y: 200 })
-  const virtualMousePosRef = useRef(virtualMousePos)
   useEffect(() => {
     virtualMousePosRef.current = virtualMousePos
   }, [virtualMousePos])
   
   const [isDraggingVMouse, setIsDraggingVMouse] = useState(false)
-  const vMouseDragOffset = useRef({ x: 0, y: 0 })
   const [isMobile, setIsMobile] = useState(false)
   const [isActualMobile, setIsActualMobile] = useState(false)
   const [showClockScroll, setShowClockScroll] = useState(false)
   const [clockScrollCenter, setClockScrollCenter] = useState({ x: 0, y: 0 })
   const [scrollAngle, setScrollAngle] = useState<number | null>(null)
   const [pointerPos, setPointerPos] = useState({ x: 0, y: 0 })
-  const edgePanRaf = useRef<number | null>(null)
-  const edgePanVelocity = useRef({ x: 0, y: 0 })
   const initialModeSet = useRef(false)
-  const lastSentCursorPos = useRef({ x: -1, y: -1 })
 
   // Performance monitoring state
   const [showPerformance, setShowPerformance] = useState(false)
   const [performance, setPerformance] = useState<any>(null)
-  const prevPerformanceRef = useRef<any>(null)
-  const prevTimeRef = useRef<number>(0)
   const [performanceSpeed, setPerformanceSpeed] = useState<any>({
     net_sent_speed: 0,
     net_recv_speed: 0,
@@ -869,45 +660,8 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     return () => window.removeEventListener('resize', checkMobile);
   }, [])
 
-  const getRealPos = useCallback((vMouseX: number, vMouseY: number) => {
-    if (!canvasRef.current || !containerRef.current) return { x: 0, y: 0 };
-    
-    const containerWidth = containerRef.current.clientWidth;
-    const containerHeight = containerRef.current.clientHeight;
-    
-    const canvasWidth = canvasRef.current.offsetWidth;
-    const canvasHeight = canvasRef.current.offsetHeight;
-    
-    const canvasLeft = containerWidth / 2 + scrollOffset.x - (canvasWidth * zoom) / 2;
-    const canvasTop = containerHeight / 2 + scrollOffset.y - (canvasHeight * zoom) / 2;
-    
-    const localX = vMouseX - canvasLeft;
-    const localY = vMouseY - canvasTop;
-    
-    const canvasX = localX / zoom;
-    const canvasY = localY / zoom;
-    
-    const targetWidth = originalSize?.width || canvasRef.current.width;
-    const targetHeight = originalSize?.height || canvasRef.current.height;
-    
-    let realX = Math.round((canvasX / canvasWidth) * targetWidth);
-    let realY = Math.round((canvasY / canvasHeight) * targetHeight);
-    
-    realX = Math.max(0, Math.min(targetWidth, realX));
-    realY = Math.max(0, Math.min(targetHeight, realY));
-    
-    return { x: realX, y: realY };
-  }, [originalSize, scrollOffset, zoom]);
-
   const getVirtualMouseHotspot = useCallback(() => {
-    // The visual tip of the MousePointer2 icon is slightly offset from the top-left
-    // due to the SVG viewBox, w-8 h-8 sizing, and scale-75 transform.
-    // We add an offset so the actual click matches the visual tip.
     if (isLandscape) {
-      // In landscape mode, the UI is rotated 90deg CW. 
-      // The cursor icon is rotated 90deg CW inside the virtual mouse container
-      // to point towards the user's top-left (phone's bottom-left).
-      // The tip of the icon moves from top-left (3, 4) to bottom-left (4, 29).
       return {
         x: virtualMousePos.x ,
         y: virtualMousePos.y + 3
@@ -923,30 +677,16 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     if (showVirtualMouse && canvasRef.current && containerRef.current) {
       const hotspot = getVirtualMouseHotspot();
       const { x: realX, y: realY } = getRealPos(hotspot.x, hotspot.y);
-      
       setCursorPos({ x: realX, y: realY });
-      
-      const now = Date.now();
-      if (now - lastMouseMoveTimeRef.current >= 30) {
-        if (realX !== lastSentCursorPos.current.x || realY !== lastSentCursorPos.current.y) {
-          if (mode === 'screen') {
-            sendCommand(device.id, device.password || "", 'input', { action: 'mousemove', useInterception, x: realX, y: realY });
-          } else {
-            sendCommand(device.id, device.password || "", 'window_input', { action: 'mousemove', id: targetId, useInterception, x: realX, y: realY });
-          }
-          lastSentCursorPos.current = { x: realX, y: realY };
-          lastMouseMoveTimeRef.current = now;
-        }
-      }
+      sendInput('mousemove', { x: realX, y: realY });
     }
-  }, [virtualMousePos, scrollOffset, zoom, originalSize, showVirtualMouse, device.id, sendCommand, mode, targetId, useInterception, getRealPos, getVirtualMouseHotspot]);
+  }, [virtualMousePos, scrollOffset, zoom, originalSize, showVirtualMouse, getRealPos, getVirtualMouseHotspot, sendInput]);
 
   const cancelUpload = useCallback((transferId: string) => {
     sendCommand(device.id, device.password || "", 'files', {
       action: 'file_cancel',
       transferId: transferId
     });
-    cancelledUploads.current.add(transferId);
     setActiveUploads(prev => prev.filter(f => f.id !== transferId));
     setUploadProgress(prev => {
       const next = { ...prev };
@@ -960,101 +700,58 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     });
   }, [device.id, device.password, sendCommand, notify]);
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const files = e.dataTransfer.files;
+  const handleDrop = async (files: FileList, clientX: number, clientY: number) => {
     if (files.length === 0) return;
-
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    // Calculate relative coordinates on the canvas
-    let x = e.clientX - rect.left;
-    let y = e.clientY - rect.top;
+    let x = clientX - rect.left;
+    let y = clientY - rect.top;
     let rectW = rect.width;
     let rectH = rect.height;
 
     if (isLandscape) {
-      x = e.clientY - rect.top;
-      y = rect.right - e.clientX;
+      x = clientY - rect.top;
+      y = rect.right - clientX;
       rectW = rect.height;
       rectH = rect.width;
     }
 
-    // Scale to remote screen coordinates
     const targetWidth = originalSize?.width || canvasRef.current!.width;
     const targetHeight = originalSize?.height || canvasRef.current!.height;
-
     const realX = Math.round((x / rectW) * targetWidth);
     const realY = Math.round((y / rectH) * targetHeight);
-
-    const CHUNK_SIZE = 128 * 1024; // 128KB chunks
+    const CHUNK_SIZE = 128 * 1024;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const transferId = `${file.name}-${Date.now()}-${i}`;
-      
       setActiveUploads(prev => [...prev, { id: transferId, filename: file.name }]);
       setUploadProgress(prev => ({ ...prev, [transferId]: 0 }));
-
       const reader = new FileReader();
       reader.onload = async (event) => {
         const arrayBuffer = event.target?.result as ArrayBuffer;
         const totalSize = arrayBuffer.byteLength;
-        
-        // Start file transfer
         sendCommand(device.id, device.password || "", 'files', {
-          action: 'drop_start',
-          transferId: transferId,
-          filename: file.name,
-          totalSize: totalSize,
-          x: realX,
-          y: realY
+          action: 'drop_start', transferId, filename: file.name, totalSize, x: realX, y: realY
         });
-
-        // Wait a bit for remote side to prepare (create file, window etc)
         await new Promise(r => setTimeout(r, 150));
-
-        // Send chunks
         let offset = 0;
-        cancelledUploads.current.delete(transferId);
-        
-        // Helper to convert chunk to base64 efficiently
         const toBase64 = (buffer: ArrayBuffer) => {
           const bytes = new Uint8Array(buffer);
           let binary = '';
-          const chunkLimit = 8192;
-          for (let i = 0; i < bytes.byteLength; i += chunkLimit) {
-            const chunk = bytes.subarray(i, i + chunkLimit);
-            // @ts-expect-error - apply works fine with Uint8Array
-            binary += String.fromCharCode.apply(null, chunk);
+          for (let i = 0; i < bytes.byteLength; i += 8192) {
+            const chunk = bytes.subarray(i, i + 8192);
+            binary += String.fromCharCode.apply(null, chunk as any);
           }
           return btoa(binary);
         };
-
         while (offset < totalSize) {
-          if (cancelledUploads.current.has(transferId)) {
-            console.log(`Upload ${transferId} cancelled`);
-            cancelledUploads.current.delete(transferId);
-            return;
-          }
-
           const chunk = arrayBuffer.slice(offset, offset + CHUNK_SIZE);
-          const base64Chunk = toBase64(chunk);
-
           sendCommand(device.id, device.password || "", 'files', {
-            action: 'drop_chunk',
-            transferId: transferId,
-            filename: file.name,
-            data: base64Chunk,
-            offset: offset
+            action: 'drop_chunk', transferId, filename: file.name, data: toBase64(chunk), offset
           });
-
           offset += CHUNK_SIZE;
-          
-          // Small delay to prevent overwhelming the socket and allow server processing
           await new Promise(r => setTimeout(r, 20));
         }
       };
@@ -1062,220 +759,10 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     }
   };
 
-  const containerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const brightnessCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const lastFrameTimeRef = useRef<number>(0)
-  const frameCountRef = useRef<number>(0)
-  const lastFpsTimeRef = useRef<number>(Date.now())
-  const lastMouseMoveTimeRef = useRef<number>(0)
-
-  // Initialize canvases
-  useEffect(() => {
-    if (!offscreenCanvasRef.current) {
-        offscreenCanvasRef.current = document.createElement('canvas')
-    }
-    if (!brightnessCanvasRef.current) {
-        brightnessCanvasRef.current = document.createElement('canvas')
-        brightnessCanvasRef.current.width = 100
-        brightnessCanvasRef.current.height = 100
-    }
-  }, [])
-
-  const metadataRef = useRef<any>(null)
-  const lastFrameTsRef = useRef<number>(0)
-  const lastProcessedTsRef = useRef<number>(0)
-  const lastHandledMessageRef = useRef<any>(null)
-  const lastHandledRtcMessageRef = useRef<any>(null)
-  
-  // Handle WebRTC signaling from server directly via socket to avoid React state batching drops
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleSignalingMessage = async (event: MessageEvent) => {
-      if (typeof event.data === 'string') {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.deviceId !== device.id) return;
-
-          if (data.type === 'webrtc_answer' && rtcPcRef.current) {
-            console.log("[WebRTC] Received answer from server via socket listener");
-            const sdp = data.sdp || data.data?.sdp;
-            if (sdp) {
-              await rtcPcRef.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
-              console.log("[WebRTC] Remote description set successfully");
-            }
-          } else if (data.type === 'webrtc_ice_candidate' && rtcPcRef.current) {
-            const candidate = data.candidate || data.data?.candidate;
-            if (candidate) {
-              await rtcPcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-            }
-          }
-        } catch (e) {
-          console.error("[WebRTC] Signaling error:", e);
-        }
-      }
-    };
-
-    socket.addEventListener('message', handleSignalingMessage);
-    return () => socket.removeEventListener('message', handleSignalingMessage);
-  }, [socket, device.id]);
-
-  // Process incoming messages (stable function to avoid React batching issues)
   const handleIncomingMessage = useCallback((msg: any) => {
     if (!msg || msg.deviceId !== device.id) return;
 
-    // Handle frame messages
-    const isScreenFrame = mode === 'screen' && (msg.type === 'screen_frame');
-    const isWindowFrame = mode === 'window' && (msg.type === 'window_frame' || msg.type === 'screen_frame');
-
-    if (isScreenFrame || isWindowFrame) {
-        const metadata = msg.metadata || {};
-        
-        // 检查时间戳，防止画面倒退（网络乱序）
-        if (metadata.ts) {
-            if (metadata.ts < lastFrameTsRef.current) {
-                // 如果收到的帧比已处理的帧还要旧，且不是因为时间戳重置（差距巨大），则丢弃
-                if (lastFrameTsRef.current - metadata.ts < 5) {
-                    return;
-                }
-            }
-            lastFrameTsRef.current = metadata.ts;
-        }
-
-        if (metadata.cursor_style && metadata.cursor_style !== cursorStyle) setCursorStyle(metadata.cursor_style);
-        if (metadata.is_locked !== undefined && !!metadata.is_locked !== isLocked) setIsLocked(!!metadata.is_locked);
-        if (metadata.has_interception !== undefined && !!metadata.has_interception !== hasInterception) setHasInterception(!!metadata.has_interception);
-
-        const mimeType = metadata.format === 'webp' ? 'image/webp' : 'image/jpeg';
-        let url: string;
-        if (msg.isBinary) {
-            const blob = new Blob([msg.data], { type: mimeType });
-            url = URL.createObjectURL(blob);
-        } else {
-            url = `data:${mimeType};base64,${msg.data}`;
-        }
-        
-        const img = new Image()
-        const frameTs = metadata.ts || 0;
-        img.onload = () => {
-            // Check again if a newer frame has already been processed
-            if (frameTs && frameTs < lastProcessedTsRef.current) {
-                if (msg.isBinary) URL.revokeObjectURL(url);
-                return;
-            }
-            if (frameTs) lastProcessedTsRef.current = frameTs;
-
-            const offscreen = offscreenCanvasRef.current
-            const canvas = canvasRef.current
-            if (!offscreen || !canvas) {
-                if (msg.isBinary) URL.revokeObjectURL(url);
-                return
-            }
-
-            // Reuse brightness canvas
-            const bCanvas = brightnessCanvasRef.current;
-            if (bCanvas) {
-                const bCtx = bCanvas.getContext('2d');
-                if (bCtx) {
-                    bCtx.drawImage(img, 0, 0, 100, 100);
-                    const imageData = bCtx.getImageData(0, 0, 100, 100);
-                    let brightness = 0;
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
-                    }
-                    brightness /= (imageData.data.length / 4);
-                    
-                    if (brightness < 10) {
-                        if (msg.isBinary) URL.revokeObjectURL(url);
-                        return;
-                    }
-                }
-            }
-
-            if (!imageSrc) setImageSrc(url); 
-            const ctx = canvas.getContext('2d')
-            const offCtx = offscreen.getContext('2d')
-            if (ctx && offCtx) {
-                const isFull = metadata.full !== false
-                const x = metadata.x || 0
-                const y = metadata.y || 0
-                const totalWidth = metadata.total_width || metadata.width || img.width
-                const totalHeight = metadata.total_height || metadata.height || img.height
-
-                if (isFull) {
-                    if (offscreen.width !== totalWidth || offscreen.height !== totalHeight) {
-                        offscreen.width = totalWidth
-                        offscreen.height = totalHeight
-                        setOriginalSize({ 
-                            width: metadata.original_width || totalWidth, 
-                            height: metadata.original_height || totalHeight 
-                        })
-                    }
-                    offCtx.drawImage(img, 0, 0)
-                } else {
-                    offCtx.drawImage(img, x, y)
-                }
-
-                if (canvas.width !== offscreen.width || canvas.height !== offscreen.height) {
-                    canvas.width = offscreen.width
-                    canvas.height = offscreen.height
-                }
-                ctx.drawImage(offscreen, 0, 0)
-            }
-            if (msg.isBinary) URL.revokeObjectURL(url);
-        }
-        img.onerror = () => {
-            if (msg.isBinary) URL.revokeObjectURL(url);
-            const command = mode === 'screen' ? 'screen' : 'window_stream'
-            sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
-        }
-        img.src = url;
-        
-        frameCountRef.current++
-        const now = Date.now()
-        if (now - lastFpsTimeRef.current >= 1000) {
-            setFps(frameCountRef.current)
-            frameCountRef.current = 0
-            lastFpsTimeRef.current = now
-        }
-        return;
-    }
-
-    // Handle metadata messages
-    if (msg.type === 'screen_metadata' || msg.type === 'window_metadata') {
-        metadataRef.current = msg;
-        if (msg.cursor_style) setCursorStyle(msg.cursor_style);
-        if (msg.is_locked !== undefined) setIsLocked(!!msg.is_locked);
-        if (msg.has_interception !== undefined) setHasInterception(!!msg.has_interception);
-        return;
-    }
-
-    // Handle other messages
-    if (msg.type === 'performance' || msg.type === 'performance_metrics') {
-        if (showPerformance) {
-            const now = Date.now()
-            if (prevPerformanceRef.current) {
-              const timeDiff = (now - prevTimeRef.current) / 1000
-              if (timeDiff > 0) {
-                setPerformanceSpeed({
-                  net_sent_speed: Math.max(0, (msg.data.net_sent - prevPerformanceRef.current.net_sent) / timeDiff),
-                  net_recv_speed: Math.max(0, (msg.data.net_recv - prevPerformanceRef.current.net_recv) / timeDiff),
-                })
-              }
-            }
-            prevPerformanceRef.current = msg.data
-            prevTimeRef.current = now
-            setPerformance(msg.data)
-        }
-    } else if (msg.type === 'pong') {
-        if (webrtcState !== 'connected' && lastPingTimeRef.current) {
-          const rtt = Date.now() - lastPingTimeRef.current;
-          setLatency(rtt);
-          lastPingTimeRef.current = null;
-        } 
-    } else if (msg.type === 'notification') {
+    if (msg.type === 'notification') {
         notify({ title: msg.data.title || "通知", message: msg.data.message || "", type: "info" });
     } else if (msg.type === 'file_progress') {
         const { transferId, progress } = msg.data;
@@ -1315,379 +802,34 @@ export function StreamView({ device, mode, targetId, onBack, title, subTitle }: 
     } else if (msg.type === 'clipboard') {
         const text = msg.data;
         const isAuto = msg.auto === true;
-        
         navigator.clipboard.writeText(text).then(() => {
-            if (!isAuto) {
-                notify({ title: "剪贴板同步成功", message: "已从远程设备获取剪贴板内容", type: "success" });
-            }
+            if (!isAuto) notify({ title: "剪贴板同步成功", message: "已从远程设备获取剪贴板内容", type: "success" });
         }).catch(err => {
-            console.error("Clipboard sync error:", err);
-            // Don't notify on auto-sync failure as it might be due to browser security (no user gesture)
-            if (!isAuto) {
-                notify({ title: "剪贴板同步失败", message: "无法写入本地剪贴板，请检查浏览器权限", type: "error" });
-            }
+            if (!isAuto) notify({ title: "剪贴板同步失败", message: "无法写入本地剪贴板，请检查浏览器权限", type: "error" });
         });
     } else if (msg.type === 'clipboard_image') {
         const base64Data = msg.data;
         const isAuto = msg.auto === true;
-        
         try {
-            // Convert base64 to blob
             const byteCharacters = atob(base64Data);
             const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
+            for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
             const byteArray = new Uint8Array(byteNumbers);
             const blob = new Blob([byteArray], { type: 'image/png' });
-            
-            // Try to write to clipboard
             if (navigator.clipboard && (window as any).ClipboardItem) {
                 const item = new (window as any).ClipboardItem({ [blob.type]: blob });
                 navigator.clipboard.write([item]).then(() => {
-                    if (!isAuto) {
-                        notify({ title: "剪贴板同步成功", message: "已从远程设备获取图片内容", type: "success" });
-                    }
+                    if (!isAuto) notify({ title: "剪贴板同步成功", message: "已从远程设备获取图片内容", type: "success" });
                 }).catch(err => {
-                    console.error("Image clipboard sync error:", err);
-                    if (!isAuto) {
-                        notify({ title: "剪贴板同步失败", message: "无法写入图片到剪贴板", type: "error" });
-                    }
+                    if (!isAuto) notify({ title: "剪贴板同步失败", message: "无法写入图片到剪贴板", type: "error" });
                 });
             }
-        } catch (e) {
-            console.error("Image processing error:", e);
-        }
-    } else if (msg.type === 'audio_opus' && listenAudio) {
-        if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            nextPlayTimeRef.current = audioContextRef.current.currentTime;
-        }
-        
-        if (!opusDecoderRef.current) {
-            opusDecoderRef.current = new OpusDecoder();
-            opusDecoderRef.current.ready.then(() => {
-                setOpusReady(true);
-            });
-        }
-
-        if (!opusReady) return;
-
-        const ctx = audioContextRef.current;
-        if (ctx.state === 'suspended') ctx.resume();
-        
-        setIsReceivingAudio(true);
-        if (audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current);
-        audioTimeoutRef.current = setTimeout(() => setIsReceivingAudio(false), 500);
-        
-        try {
-            const { channelData, samplesDecoded, sampleRate } = opusDecoderRef.current.decodeFrame(msg.data);
-            if (samplesDecoded > 0) {
-                const float32Data = channelData[0];
-                const audioBuffer = ctx.createBuffer(1, float32Data.length, sampleRate);
-                audioBuffer.getChannelData(0).set(float32Data);
-                const source = ctx.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(ctx.destination);
-                const currentTime = ctx.currentTime;
-                // 增加一个小缓冲区（150ms）来应对网络抖动，减少音频断点
-                const audioBufferDelay = 0.15;
-                if (nextPlayTimeRef.current < currentTime + audioBufferDelay) {
-                    nextPlayTimeRef.current = currentTime + audioBufferDelay;
-                }
-                source.start(nextPlayTimeRef.current);
-                nextPlayTimeRef.current += audioBuffer.duration;
-            }
-        } catch (e) {
-            console.error("Opus decode error", e);
-        }
-    } else if (msg.type === 'audio_data' && listenAudio) {
-        if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-            nextPlayTimeRef.current = audioContextRef.current.currentTime;
-        }
-        const ctx = audioContextRef.current;
-        if (ctx.state === 'suspended') ctx.resume();
-        setIsReceivingAudio(true);
-        if (audioTimeoutRef.current) clearTimeout(audioTimeoutRef.current);
-        audioTimeoutRef.current = setTimeout(() => setIsReceivingAudio(false), 500);
-        try {
-            const bytes = msg.data;
-            let int16Data: Int16Array;
-            if (bytes.byteOffset % 2 === 0) {
-                int16Data = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
-            } else {
-                int16Data = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-            }
-            const float32Data = new Float32Array(int16Data.length);
-            for (let i = 0; i < int16Data.length; i++) float32Data[i] = int16Data[i] / 32768.0;
-            const audioBuffer = ctx.createBuffer(1, float32Data.length, 16000);
-            audioBuffer.getChannelData(0).set(float32Data);
-            const source = ctx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(ctx.destination);
-            const currentTime = ctx.currentTime;
-            // 增加一个小缓冲区（150ms）来应对网络抖动，减少音频断点
-            const audioBufferDelay = 0.15;
-            if (nextPlayTimeRef.current < currentTime + audioBufferDelay) {
-                nextPlayTimeRef.current = currentTime + audioBufferDelay;
-            }
-            source.start(nextPlayTimeRef.current);
-            nextPlayTimeRef.current += audioBuffer.duration;
-        } catch (e) {
-            console.error("Audio playback error:", e);
-        }
+        } catch (e) {}
     }
-  }, [device.id, mode, listenAudio, showPerformance, notify, onBack, sendCommand, targetId, webrtcState, opusReady]);
+  }, [device.id, notify, onBack]);
 
-  // Handle incoming messages
-  useEffect(() => {
-    handleIncomingMessage(lastMessage);
-  }, [lastMessage, handleIncomingMessage]);
-
-  useEffect(() => {
-    handleIncomingMessage(rtcMessage);
-  }, [rtcMessage, handleIncomingMessage]);
-
-// 
-useEffect(() => {
-  let interval: NodeJS.Timeout;
-
-  if (webrtcState === "connected" && rtcPcRef.current) {
-    interval = setInterval(async () => {
-      try {
-        const stats = await rtcPcRef.current!.getStats();
-        stats.forEach((report) => {
-          // 查找活跃的候选对统计信息
-          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-            // RTT
-            const rtt = report.currentRoundTripTime;
-            if (rtt !== undefined) {
-              setLatency(Math.round(rtt * 1000));
-            }
-
-            // Determine connection type
-            const localCandidate = stats.get(report.localCandidateId);
-            const remoteCandidate = stats.get(report.remoteCandidateId);
-            if (localCandidate && remoteCandidate) {
-                const isInternal = localCandidate.candidateType === 'host' && remoteCandidate.candidateType === 'host';
-                setConnectionType(isInternal ? 'internal' : 'external');
-            }
-          }
-        });
-      } catch (e) {
-        console.error("[WebRTC] Failed to get stats:", e);
-      }
-    }, 1000); // 每秒更新一次
-  }
-
-  return () => clearInterval(interval);
-}, [webrtcState]);
-
-  // Audio capture (Microphone)
-  useEffect(() => {
-    if (speakAudio) {
-      // Check if same machine (simple check by IP)
-      const isSameMachine = device.ip === '127.0.0.1' || device.ip === '::1' || device.ip === 'localhost';
-      if (isSameMachine) {
-          notify({
-              title: "提示",
-              message: "客户端和控制端在同一台电脑，已自动禁用麦克风以防止回音。",
-              type: "info"
-          });
-          setSpeakAudio(false);
-          return;
-      }
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        notify({
-          title: "错误",
-          message: "浏览器不支持麦克风访问或未在安全上下文(HTTPS)中运行。",
-          type: "error"
-        });
-        setSpeakAudio(false);
-        return;
-      }
-
-      navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-        mediaStreamRef.current = stream;
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-        const source = ctx.createMediaStreamSource(stream);
-        const processor = ctx.createScriptProcessor(1024, 1, 1);
-        
-        processor.onaudioprocess = (e) => {
-          const inputData = e.inputBuffer.getChannelData(0);
-          const int16Data = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            let s = Math.max(-1, Math.min(1, inputData[i]));
-            int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-          }
-          
-          const bytes = new Uint8Array(int16Data.buffer);
-          let binary = '';
-          for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
-          }
-          const base64 = window.btoa(binary);
-          
-          sendCommand(device.id, device.password || "", 'audio_input', { data: base64 });
-        };
-        
-        source.connect(processor);
-        processor.connect(ctx.destination);
-        audioProcessorRef.current = processor;
-      }).catch(err => {
-        console.error("Error accessing microphone", err);
-                notify({
-                  title: "错误",
-                  message: "无法访问麦克风",
-                  type: "error"
-                });
-        setSpeakAudio(false);
-      });
-    } else {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-        mediaStreamRef.current = null;
-      }
-      if (audioProcessorRef.current) {
-        audioProcessorRef.current.disconnect();
-        audioProcessorRef.current = null;
-      }
-    }
-    
-    return () => {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (audioProcessorRef.current) {
-        audioProcessorRef.current.disconnect();
-      }
-    }
-  }, [speakAudio, device.id, sendCommand, device.ip, notify]);
-
-  const sendRTCCommand = useCallback((command: string, args: any) => {
-      if (rtcDcRef.current?.readyState === 'open') {
-          rtcDcRef.current.send(JSON.stringify({ 
-              command, 
-              args,
-              deviceId: device.id,
-              password: device.password || ""
-          }));
-      } else {
-          sendCommand(device.id, device.password || "", command, args);
-      }
-  }, [device.id, device.password, sendCommand]);
-
-  // Stream control loop
-  useEffect(() => {
-    const command = mode === 'screen' ? 'screen' : 'window_stream'
-    const args: any = { 
-        action: 'start', 
-        quality: quality[0], 
-        scale: streamScale[0],
-        compress: compress,
-        webp: useWebP,
-        fps: targetFps[0]
-    }
-    if (mode === 'window' && targetId) {
-        args.id = targetId
-    }
-
-    const startStream = () => {
-        sendRTCCommand(command, args);
-        // Request initial full screen
-        sendRTCCommand(command, { ...args, action: 'refresh' });
-    }
-
-    const stopStream = () => {
-        sendRTCCommand(command, { action: 'stop', id: targetId });
-    }
-
-    startStream()
-
-    // Keep awake loop
-    const awakeInterval = setInterval(() => {
-        sendCommand(device.id, device.password || "", 'keep_awake', {});
-    }, 30000)
-
-    // Latency measurement loop
-    const latencyInterval = setInterval(() => {
-        lastPingTimeRef.current = Date.now();
-        sendCommand(device.id, device.password || "", 'ping', {});
-    }, 3000)
-
-    const handleVisibilityChange = () => {
-        if (document.hidden) {
-            stopStream()
-        } else {
-            startStream()
-            // Force WebRTC reconnect when coming back to the tab
-            // This fixes the "frozen screen" issue caused by browser throttling WebRTC in background
-            setReconnectTrigger(prev => prev + 1)
-        }
-    }
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-        clearInterval(awakeInterval)
-        clearInterval(latencyInterval)
-        document.removeEventListener('visibilitychange', handleVisibilityChange)
-        stopStream()
-        if (opusDecoderRef.current) {
-            opusDecoderRef.current.free();
-            opusDecoderRef.current = null;
-        }
-    }
-  }, [device.id, device.password, quality, streamScale, compress, useWebP, sendCommand, mode, targetId, sendRTCCommand])
-
-  const sendInput = (action: string, data: any) => {
-      if (mode === 'screen') {
-          sendRTCCommand('input', { action, useInterception, ...data })
-      } else {
-          sendRTCCommand('window_input', { action, id: targetId, useInterception, ...data })
-      }
-  }
-
-  const sendHotkey = (keys: string[]) => {
-      sendInput('hotkey', { keys })
-  }
-
-  const getPyautoguiKey = (key: string) => {
-    const map: Record<string, string> = {
-      "ArrowUp": "up",
-      "ArrowDown": "down",
-      "ArrowLeft": "left",
-      "ArrowRight": "right",
-      "Enter": "enter",
-      "Escape": "esc",
-      "Backspace": "backspace",
-      "Delete": "delete",
-      "Tab": "tab",
-      "Space": "space",
-      " ": "space",
-      "Control": "ctrl",
-      "Alt": "alt",
-      "Shift": "shift",
-      "Meta": "win",
-      "Win": "win",
-      "Cmd": "win"
-    }
-    return map[key] || key.toLowerCase()
-  }
-
-  const handleRefresh = useCallback(() => {
-    const command = mode === 'screen' ? 'screen' : 'window_stream'
-    sendCommand(device.id, device.password || "", command, { action: 'refresh', id: targetId });
-    // Force WebRTC reconnect and re-fetch TURN config
-    setReconnectCount(0); // Reset retry count for manual refresh
-    setReconnectTrigger(prev => prev + 1);
-    notify({
-        title: "正在刷新",
-        message: "已重新请求画面并重连P2P",
-        type: "info"
-    });
-  }, [mode, device.id, device.password, targetId, sendCommand, notify]);
+  useEffect(() => { handleIncomingMessage(lastMessage); }, [lastMessage, handleIncomingMessage]);
+  useEffect(() => { handleIncomingMessage(rtcMessage); }, [rtcMessage, handleIncomingMessage]);
 
   const handleImportKeymap = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2602,103 +1744,73 @@ useEffect(() => {
           }
         }}
       >
-          <div 
-            className={cn(
-                "relative transition-transform duration-75 ease-out",
-                !imageSrc && "hidden"
-            )}
-            style={{ 
-              transform: `translate(${scrollOffset.x}px, ${scrollOffset.y}px) scale(${zoom})`,
-              cursor: (showVirtualMouse || isEditingKeymap) ? 'none' : cursorStyle
-            }}
-          >
-            <canvas 
-              ref={canvasRef}
-              className={cn(
-                "max-w-none select-none transition-opacity",
-                (!mouseMode || isEditingKeymap) && "opacity-90"
-              )}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onDrop={handleDrop}
-              // Remove event handlers from here as they are on the container now or handled via ref
-              onWheel={(e) => {
-                if (!mouseMode || isEditingKeymap) return;
-                sendInput('scroll', { dx: e.deltaX, dy: e.deltaY });
-              }}
-              onPointerMove={(e) => {
-                if (isEditingKeymap) return;
-                const x = e.nativeEvent.offsetX
-                const y = e.nativeEvent.offsetY
-                
-                const targetWidth = originalSize?.width || e.currentTarget.width
-                const targetHeight = originalSize?.height || e.currentTarget.height
-                
-                const realX = Math.round((x / e.currentTarget.offsetWidth) * targetWidth)
-                const realY = Math.round((y / e.currentTarget.offsetHeight) * targetHeight)
+        <StreamScreen
+          ref={screenRef}
+          canvasRef={canvasRef}
+          containerRef={containerRef}
+          device={device}
+          mode={mode}
+          targetId={targetId}
+          quality={quality[0]}
+          streamScale={streamScale[0]}
+          compress={compress}
+          useWebP={useWebP}
+          targetFps={targetFps[0]}
+          listenAudio={listenAudio}
+          speakAudio={speakAudio}
+          setSpeakAudio={setSpeakAudio}
+          mouseMode={mouseMode}
+          interactionMode={interactionMode}
+          keyboardMode={keyboardMode}
+          useInterception={useInterception}
+          isLandscape={isLandscape}
+          zoom={zoom}
+          setZoom={setZoom}
+          scrollOffset={scrollOffset}
+          setScrollOffset={setScrollOffset}
+          onFpsChange={setFps}
+          onLatencyChange={setLatency}
+          onOriginalSizeChange={setOriginalSize}
+          onWebrtcStateChange={setWebrtcState}
+          onConnectionTypeChange={setConnectionType}
+          onIsLockedChange={setIsLocked}
+          onHasInterceptionChange={setHasInterception}
+          onCursorStyleChange={setCursorStyle}
+          onReceivingAudioChange={setIsReceivingAudio}
+          onRtcMessage={setRtcMessage}
+          onBack={onBack}
+          onFileDrop={handleDrop}
+          isEditingKeymap={isEditingKeymap}
+          showVirtualMouse={showVirtualMouse}
+          virtualMousePos={virtualMousePos}
+          getVirtualMouseHotspot={getVirtualMouseHotspot}
+          cursorStyle={cursorStyle}
+          imageSrc={imageSrc}
+          setImageSrc={setImageSrc}
+          showPerformance={showPerformance}
+          onPerformanceData={(data) => {
+            const now = Date.now()
+            if (prevPerformanceRef.current) {
+              const timeDiff = (now - prevTimeRef.current) / 1000
+              if (timeDiff > 0) {
+                setPerformanceSpeed({
+                  net_sent_speed: Math.max(0, (data.net_sent - prevPerformanceRef.current.net_sent) / timeDiff),
+                  net_recv_speed: Math.max(0, (data.net_recv - prevPerformanceRef.current.net_recv) / timeDiff),
+                })
+              }
+            }
+            prevPerformanceRef.current = data
+            prevTimeRef.current = now
+            setPerformance(data)
+          }}
+        />
 
-                setCursorPos({ x: realX, y: realY })
-                
-                if (mouseMode && (interactionMode === 'mouse' || e.pointerType === 'mouse')) {
-                  const now = Date.now()
-                  if (now - lastMouseMoveTimeRef.current >= 30) {
-                    if (realX !== lastSentCursorPos.current.x || realY !== lastSentCursorPos.current.y) {
-                      sendInput('mousemove', { x: realX, y: realY })
-                      lastSentCursorPos.current = { x: realX, y: realY };
-                      lastMouseMoveTimeRef.current = now
-                    }
-                  }
-                }
-              }}
-              onPointerDown={(e) => {
-                if (isEditingKeymap || !mouseMode) return
-                if (interactionMode === 'touch' && e.pointerType === 'touch') return;
-                if (e.button === 1 || (e.button === 0 && e.altKey)) return;
-                e.currentTarget.setPointerCapture(e.pointerId);
-                
-                const x = e.nativeEvent.offsetX
-                const y = e.nativeEvent.offsetY
-                
-                const targetWidth = originalSize?.width || e.currentTarget.width
-                const targetHeight = originalSize?.height || e.currentTarget.height
-                
-                const realX = Math.round((x / e.currentTarget.offsetWidth) * targetWidth)
-                const realY = Math.round((y / e.currentTarget.offsetHeight) * targetHeight)
-
-                const button = e.button === 2 ? 'right' : 'left';
-                lastSentCursorPos.current = { x: realX, y: realY };
-                sendInput('mousedown', { x: realX, y: realY, button })
-              }}
-              onPointerUp={(e) => {
-                if (isEditingKeymap || !mouseMode) return
-                if (interactionMode === 'touch' && e.pointerType === 'touch') return;
-                if (e.button === 1 || (e.button === 0 && e.altKey)) return;
-                try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(e) {}
-                
-                const x = e.nativeEvent.offsetX
-                const y = e.nativeEvent.offsetY
-                
-                const targetWidth = originalSize?.width || e.currentTarget.width
-                const targetHeight = originalSize?.height || e.currentTarget.height
-                
-                const realX = Math.round((x / e.currentTarget.offsetWidth) * targetWidth)
-                const realY = Math.round((y / e.currentTarget.offsetHeight) * targetHeight)
-
-                const button = e.button === 2 ? 'right' : 'left';
-                lastSentCursorPos.current = { x: realX, y: realY };
-                sendInput('mouseup', { x: realX, y: realY, button })
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault()
-              }}
-            />
-          </div>
-
-          {/* Keymap Layers - Fixed relative to control window container */}
+        {/* Keymap Layers - Fixed relative to control window container */}
           { (isEditingKeymap || (!isEditingKeymap && keymapConfig)) && (
-             <div className="absolute inset-0 z-[40] pointer-events-auto">
+             <div className={cn(
+               "absolute inset-0 z-[40]",
+               isEditingKeymap ? "pointer-events-auto" : "pointer-events-none"
+             )}>
                <KeymapCanvas />
              </div>
           )}
@@ -2824,7 +1936,6 @@ useEffect(() => {
                         // But we use the corrected pos.
 
                         sendInput('mousemove', { x: pos.x, y: pos.y });
-                        lastSentCursorPos.current = { x: pos.x, y: pos.y };
                         sendInput('mousedown', { x: pos.x, y: pos.y, button: 'left' });
                       }
                       
@@ -2896,7 +2007,6 @@ useEffect(() => {
                         const hotspot = getVirtualMouseHotspot();
                         const pos = getRealPos(hotspot.x, hotspot.y);
                         sendInput('mousemove', { x: pos.x, y: pos.y });
-                        lastSentCursorPos.current = { x: pos.x, y: pos.y };
                         sendInput('mousedown', { x: pos.x, y: pos.y, button: 'right' });
                       }
                       

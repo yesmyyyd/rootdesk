@@ -76,9 +76,9 @@ sudo mkdir -p /home/turnserver
 cat << EOF | sudo tee /home/turnserver/turnserver.conf > /dev/null
 listening-port=3478
 listening-ip=$INNER_LISTEN_IP
-external-ip=$PUBLIC_EXTERNAL_IP
+external-ip=$PUBLIC_EXTERNAL_IP/$INNER_LISTEN_IP
 
-lt-cred-mech
+realm=yyds.control
 use-auth-secret
 static-auth-secret=$STATIC_SECRET
 
@@ -109,7 +109,7 @@ EOF
 
 # 启动 TURN 服务
 sudo systemctl daemon-reload
-sudo systemctl enable turnserver
+sudo systemctl stop turnserver
 sudo systemctl start turnserver
 
 # 防火墙放行 (如果使用 firewalld)
@@ -236,7 +236,8 @@ fi
 
 echo -e "\n[TURN/STUN 服务信息]"
 echo "STUN: stun:$PUBLIC_EXTERNAL_IP:3478"
-echo "TURN: turn:$PUBLIC_EXTERNAL_IP:3478?transport=udp"
+echo "TURN (UDP): turn:$PUBLIC_EXTERNAL_IP:3478?transport=udp"
+echo "TURN (TCP): turn:$PUBLIC_EXTERNAL_IP:3478?transport=tcp"
 echo "密钥: $STATIC_SECRET"
 
 echo -e "\n\033[31m⚠️  请确保在云控制台安全组开放以下端口：\033[0m"

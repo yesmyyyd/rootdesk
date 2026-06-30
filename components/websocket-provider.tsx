@@ -467,13 +467,21 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // Generate a temporary request ID to match the response
+      const requestId = Math.random().toString(36).substring(7);
+
       const handler = async (event: MessageEvent) => {
         try {
           if (typeof event.data !== 'string') return;
           const data = JSON.parse(event.data);
+          
+          // Check if this is the response for our request
           if (data.type === 'turn_config' && data.encryptedData) {
+            // If server returned a clientId, we should ideally match it, 
+            // but for now we rely on the single-request-per-call logic.
             socketRef.current?.removeEventListener('message', handler);
             
+            console.log('[WebSocket] Received TURN config, decrypting...');
             // Decrypt using device password
             const encrypted = Uint8Array.from(atob(data.encryptedData), c => c.charCodeAt(0));
             
@@ -487,8 +495,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
               decryptedStr += String.fromCharCode(encrypted[i] ^ key[i % key.length]);
             }
             
-            resolve(JSON.parse(decryptedStr));
-          } else if (data.type === 'error' && data.message?.includes('TURN config')) {
+            const config = JSON.parse(decryptedStr);
+            console.log('[WebSocket] TURN config decrypted successfully');
+            resolve(config);
+          } else if (data.type === 'error' && (data.message?.includes('TURN config') || data.message?.includes('密码错误'))) {
             socketRef.current?.removeEventListener('message', handler);
             reject(new Error(data.message));
           }
@@ -498,13 +508,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       };
 
       socketRef.current.addEventListener('message', handler);
+      // We don't have the real clientId here easily, but the server will send it to this socket anyway
       socketRef.current.send(JSON.stringify({ type: 'get_turn_config', deviceId, password }));
 
-      // Timeout after 5 seconds
+      // Timeout after 8 seconds (increased for mobile)
       setTimeout(() => {
         socketRef.current?.removeEventListener('message', handler);
         reject(new Error('Timeout waiting for TURN config'));
-      }, 5000);
+      }, 8000);
     });
   }, []);
 

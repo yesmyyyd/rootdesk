@@ -1,5 +1,4 @@
 import sys
-import sys
 import os
 import time
 import requests
@@ -8,7 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QPushButton, QLabel, QStackedWidget, QLineEdit, QScrollArea,
                              QGridLayout, QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
                              QMessageBox, QDialog, QFormLayout, QTextEdit, QCheckBox, QComboBox,
-                             QSizePolicy, QSpacerItem, QButtonGroup)
+                             QSizePolicy, QSpacerItem, QButtonGroup, QProgressBar)
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtProperty, QPropertyAnimation, QTimer, QSize, QUrl, QRect, QPoint, QEasingCurve, pyqtSlot
 from PyQt5.QtGui import QFont, QIcon, QCursor, QColor, QDesktopServices, QPainter
 import qtawesome as qta
@@ -229,11 +228,56 @@ class UpdateDialog(QDialog):
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowCloseButtonHint)
             
     def on_update(self):
-        QDesktopServices.openUrl(QUrl(self.url))
-        if self.force:
-            QApplication.quit()
-        else:
+        # 统一调用 MainWindow 的下载进度条更新方法
+        main_win = self.parent()
+        if hasattr(main_win, "start_download_update"):
+            main_win.start_download_update(self.url)
             self.accept()
+        else:
+            QDesktopServices.openUrl(QUrl(self.url))
+            self.accept()
+
+class DownloadProgressDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("正在下载更新")
+        self.setFixedSize(400, 150)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setStyleSheet(GLOBAL_STYLE)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(30, 20, 30, 20)
+        layout.setSpacing(15)
+        
+        self.lbl_status = QLabel("准备下载...")
+        self.lbl_status.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.lbl_status)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 6px;
+                background-color: {CARD_COLOR};
+                text-align: center;
+                height: 24px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {PRIMARY_COLOR};
+                border-radius: 5px;
+            }}
+        """)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+        
+        self.lbl_info = QLabel("请稍候，下载完成后将自动启动安装程序。")
+        self.lbl_info.setStyleSheet(f"color: {MUTED_COLOR}; font-size: 11px;")
+        layout.addWidget(self.lbl_info)
+
+    def set_progress(self, value, text=None):
+        self.progress_bar.setValue(value)
+        if text:
+            self.lbl_status.setText(text)
 
 class Toast(QLabel):
     def __init__(self, text, parent=None):
@@ -372,6 +416,59 @@ class RemoteWidget(QWidget):
         self.warnings_layout = QVBoxLayout()
         self.warnings_layout.setSpacing(8)
         layout.addLayout(self.warnings_layout)
+
+        # Update Info Banner (Initially Hidden)
+        self.update_banner = QFrame()
+        self.update_banner.setObjectName("updateBanner")
+        self.update_banner.setStyleSheet(f"""
+            QFrame#updateBanner {{
+                background-color: rgba(34, 197, 94, 0.1);
+                border: 1px solid rgba(34, 197, 94, 0.3);
+                border-radius: 12px;
+            }}
+        """)
+        ub_main_layout = QVBoxLayout(self.update_banner)
+        ub_main_layout.setContentsMargins(16, 16, 16, 16)
+        ub_main_layout.setSpacing(10)
+        
+        ub_header = QHBoxLayout()
+        u_warn_icon = QLabel()
+        u_warn_icon.setPixmap(qta.icon('fa5s.arrow-alt-circle-up', color=SUCCESS_COLOR).pixmap(QSize(20, 20)))
+        ub_header.addWidget(u_warn_icon)
+        
+        self.lbl_update_title = QLabel("发现新版本")
+        self.lbl_update_title.setStyleSheet(f"color: {SUCCESS_COLOR}; font-size: 15px; font-weight: bold;")
+        ub_header.addWidget(self.lbl_update_title)
+        ub_header.addStretch()
+        
+        btn_go_update = QPushButton(" 立即更新")
+        btn_go_update.setIcon(qta.icon('fa5s.download', color='white'))
+        btn_go_update.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {SUCCESS_COLOR};
+                color: white;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #16a34a;
+            }}
+        """)
+        btn_go_update.setCursor(Qt.PointingHandCursor)
+        btn_go_update.clicked.connect(self.on_update_clicked)
+        ub_header.addWidget(btn_go_update)
+        ub_main_layout.addLayout(ub_header)
+        
+        self.lbl_update_info = QLabel("")
+        self.lbl_update_info.setStyleSheet(f"color: {FG_COLOR}; font-size: 13px; line-height: 1.4; padding-left: 30px;")
+        self.lbl_update_info.setWordWrap(True)
+        self.lbl_update_info.setTextFormat(Qt.PlainText)
+        ub_main_layout.addWidget(self.lbl_update_info)
+        
+        self.update_banner.hide()
+        self.warnings_layout.addWidget(self.update_banner)
 
         # 1. Service Warning
         self.service_banner = QFrame()
@@ -712,6 +809,20 @@ class RemoteWidget(QWidget):
             else:
                 QMessageBox.warning(self, "修复失败", res.get("error", "未知错误"))
 
+    def on_update_clicked(self):
+        # 统一调用 MainWindow 的下载进度条更新方法
+        main_win = self.window()
+        if hasattr(main_win, "start_download_update") and hasattr(self, "update_url"):
+            main_win.start_download_update(self.update_url)
+        elif hasattr(self, "update_url"):
+            QDesktopServices.openUrl(QUrl(self.update_url))
+
+    def show_update_info(self, name, desc, url):
+        self.update_url = url
+        self.lbl_update_title.setText(f"发现新版本 v{name}    立即更新，畅享极致使用体验 ")
+        self.lbl_update_info.setText(desc if desc else "暂无更新说明")
+        self.update_banner.show()
+
     def show_message(self, text):
         toast = Toast(text, self)
         # Position it at the bottom center of the RemoteWidget
@@ -779,7 +890,13 @@ class RemoteWidget(QWidget):
         if hasattr(self.bridge, 'open_web_console'):
             self.bridge.open_web_console()
         else:
-            QDesktopServices.openUrl(QUrl("https://rootdesk.cn"))
+            # 尝试获取 APP_URL
+            base_url = "https://rootdesk.cn"
+            if hasattr(self.bridge, "get_app_url"):
+                res = self.bridge.get_app_url()
+                if res and res.get("url"):
+                    base_url = res.get("url")
+            QDesktopServices.openUrl(QUrl(base_url))
             
     def connect_remote(self):
         did = self.inp_remote_id.text().strip()
@@ -790,7 +907,14 @@ class RemoteWidget(QWidget):
         
         self.show_message(f"正在连接到 {did}...")
         try:
-            url = f"https://rootdesk.cn/?deviceId={did.replace(' ', '')}&password={pwd}&autostart=true"
+            # 尝试获取 APP_URL
+            base_url = "https://rootdesk.cn"
+            if hasattr(self.bridge, "get_app_url"):
+                res = self.bridge.get_app_url()
+                if res and res.get("url"):
+                    base_url = res.get("url")
+            
+            url = f"{base_url.rstrip('/')}/?deviceId={did.replace(' ', '')}&password={pwd}&autostart=true"
             QDesktopServices.openUrl(QUrl(url))
         except Exception as e:
             print("Connect remote error:", e)
@@ -1061,6 +1185,13 @@ class DevicesWidget(QWidget):
             
         self.show_message(f"正在连接到 {did}...")
         
+        # 尝试获取 APP_URL
+        base_url = "https://rootdesk.cn"
+        if hasattr(self.bridge, "get_app_url"):
+            res = self.bridge.get_app_url()
+            if res and res.get("url"):
+                base_url = res.get("url")
+        
         if hasattr(self.bridge, "connect_to_remote"):
             try:
                 # Call bridge method with positional arguments as defined in client.py
@@ -1068,7 +1199,7 @@ class DevicesWidget(QWidget):
             except Exception as e:
                 # Fallback to URL opening if bridge fails
                 try:
-                    url = f"https://rootdesk.cn/?deviceId={did.replace(' ', '')}&password={pwd}&autostart=true"
+                    url = f"{base_url.rstrip('/')}/?deviceId={did.replace(' ', '')}&password={pwd}&autostart=true"
                     QDesktopServices.openUrl(QUrl(url))
                     res = {"success": True}
                 except:
@@ -1079,7 +1210,7 @@ class DevicesWidget(QWidget):
                 QMessageBox.warning(self, "连接失败", res.get("error", "未知错误"))
         else:
             try:
-                url = f"https://rootdesk.cn/?deviceId={did.replace(' ', '')}&password={pwd}&autostart=true"
+                url = f"{base_url.rstrip('/')}/?deviceId={did.replace(' ', '')}&password={pwd}&autostart=true"
                 QDesktopServices.openUrl(QUrl(url))
             except Exception as e:
                 print("Connect remote error:", e)
@@ -1624,6 +1755,14 @@ class SettingsWidget(QWidget):
         c_layout.addSpacing(16)
         btn_save = QPushButton("保存并重连")
         btn_save.setObjectName("primaryBtn")
+        btn_save.setStyleSheet(f"""
+            QPushButton#primaryBtn {{
+                background-color: {SUCCESS_COLOR};
+            }}
+            QPushButton#primaryBtn:hover {{
+                background-color: #16a34a;
+            }}
+        """)
         btn_save.clicked.connect(self.save_network_config)
         c_layout.addWidget(btn_save)
         
@@ -1677,7 +1816,7 @@ class SettingsWidget(QWidget):
                 self.net_recon.text().strip()
             )
             if res and res.get("success"):
-                QMessageBox.information(self, "成功", "网络配置已保存并生效。")
+                QMessageBox.information(self, "成功", "网络配置已保存并尝试重新连接。\n\n提示：如果配置未生效，请尝试重启客户端。")
             else:
                 QMessageBox.warning(self, "失败", res.get("error", "未知错误"))
 
@@ -1872,6 +2011,47 @@ class AboutWidget(QWidget):
         btn_update_layout.addStretch()
         c_layout.addLayout(btn_update_layout)
         
+        # Update Info Panel (Initially Hidden)
+        self.update_panel = QFrame()
+        self.update_panel.setObjectName("card")
+        self.update_panel.setStyleSheet(f"QFrame#card {{ background-color: rgba(34, 197, 94, 0.1); border: 1px solid {SUCCESS_COLOR}; border-radius: 12px; }}")
+        self.update_panel.setFixedWidth(600)
+        self.update_panel.setVisible(False)
+        
+        u_layout = QVBoxLayout(self.update_panel)
+        u_layout.setContentsMargins(20, 20, 20, 20)
+        
+        u_header = QHBoxLayout()
+        u_icon = QLabel()
+        u_icon.setPixmap(qta.icon('fa5s.arrow-alt-circle-up', color=SUCCESS_COLOR).pixmap(QSize(20, 20)))
+        self.lbl_update_title = QLabel("发现新版本")
+        self.lbl_update_title.setStyleSheet(f"color: {SUCCESS_COLOR}; font-size: 16px; font-weight: bold;")
+        u_header.addWidget(u_icon)
+        u_header.addWidget(self.lbl_update_title)
+        u_header.addStretch()
+        u_layout.addLayout(u_header)
+        
+        self.lbl_update_desc = QLabel("")
+        self.lbl_update_desc.setStyleSheet(f"color: {FG_COLOR}; font-size: 13px; margin-top: 10px;")
+        self.lbl_update_desc.setWordWrap(True)
+        u_layout.addWidget(self.lbl_update_desc)
+        
+        u_btn_layout = QHBoxLayout()
+        u_btn_layout.addStretch()
+        btn_go_update = QPushButton(" 立即更新")
+        btn_go_update.setIcon(qta.icon('fa5s.download', color='white'))
+        btn_go_update.setStyleSheet(f"background-color: {SUCCESS_COLOR}; color: white; border: none; padding: 8px 20px; border-radius: 6px; font-weight: bold;")
+        btn_go_update.clicked.connect(self.on_panel_update_clicked)
+        u_btn_layout.addWidget(btn_go_update)
+        u_layout.addLayout(u_btn_layout)
+        
+        u_panel_h = QHBoxLayout()
+        u_panel_h.addStretch()
+        u_panel_h.addWidget(self.update_panel)
+        u_panel_h.addStretch()
+        c_layout.addLayout(u_panel_h)
+        c_layout.addSpacing(20)
+        
         # Core Features
         features_title = QLabel("核心功能")
         features_title.setStyleSheet("font-size: 22px; font-weight: bold; margin-bottom: 24px;")
@@ -1926,10 +2106,22 @@ class AboutWidget(QWidget):
         links_grid = QGridLayout()
         links_grid.setSpacing(16)
         
+        # 动态推导官方链接基准
+        base_domain = "rootdesk.cn"
+        if hasattr(self.bridge, "get_app_url"):
+            res = self.bridge.get_app_url()
+            if res and res.get("url"):
+                from urllib.parse import urlparse
+                parsed = urlparse(res.get("url"))
+                if parsed.netloc:
+                    # 仅当不是 rootdesk.cn 时尝试使用当前域名
+                    if "rootdesk.cn" not in parsed.netloc:
+                        base_domain = parsed.netloc
+
         links = [
             ("Gitee 仓库", "查看源代码，提交 Issue", "fa5b.github", "https://gitee.com/yesmyyyd/rootdesk"),
-            ("使用文档", "详细的使用教程和 API 文档", "fa5s.book", "https://doc.rootdesk.cn"),
-            ("社区交流", "加入 微信群 交流", "fa5s.comment-alt", "https://contact.rootdesk.cn"),
+            ("使用文档", "详细的使用教程和 API 文档", "fa5s.book", f"https://doc.{base_domain}"),
+            ("社区交流", "加入 微信群 交流", "fa5s.comment-alt", f"https://contact.{base_domain}"),
             ("问题反馈", "反馈建议与错误报告", "fa5s.exclamation-circle", "https://gitee.com/yesmyyyd/rootdesk/issues")
         ]
         
@@ -2096,17 +2288,34 @@ class AboutWidget(QWidget):
         footer.setAlignment(Qt.AlignCenter)
         c_layout.addWidget(footer)
 
+    def on_panel_update_clicked(self):
+        # 统一调用 MainWindow 的下载进度条更新方法
+        main_win = self.window()
+        if hasattr(main_win, "start_download_update") and hasattr(self, "update_url"):
+            main_win.start_download_update(self.update_url)
+        elif hasattr(self, "update_url"):
+            QDesktopServices.openUrl(QUrl(self.update_url))
+
+    def show_update_info(self, name, desc, url):
+        self.update_url = url
+        self.lbl_update_title.setText(f"发现新版本 v{name}")
+        self.lbl_update_desc.setText(desc)
+        self.update_panel.setVisible(True)
+
     def show_message(self, text):
         toast = Toast(text, self)
         toast.show_toast()
 
-    def show_update_dialog(self, name, desc, url, force):
-        print(f"[*] Showing update dialog: {name}")
-        dialog = UpdateDialog(name, desc, url, force, self)
-        dialog.exec_()
-
     def check_update(self):
         self.show_message("正在检查更新...")
+        
+        # 尝试获取 APP_URL 作为默认 URL
+        base_url = "https://rootdesk.cn"
+        if hasattr(self.bridge, "get_app_url"):
+            res_url = self.bridge.get_app_url()
+            if res_url and res_url.get("url"):
+                base_url = res_url.get("url")
+
         def thread_worker():
             try:
                 if hasattr(self.bridge, "check_for_updates"):
@@ -2115,12 +2324,23 @@ class AboutWidget(QWidget):
                         if res.get("hasUpdate"):
                             v_name = res.get("versionName", "未知")
                             v_desc = res.get("versionDesc", "暂无说明")
-                            v_url = res.get("versionUrl", "https://rootdesk.cn")
+                            v_url = res.get("versionUrl", base_url)
                             v_force = res.get("isForce", False)
                             
-                            QTimer.singleShot(0, lambda: self.show_update_dialog(v_name, v_desc, v_url, v_force))
+                            # 获取 MainWindow 并发出信号，确保所有 UI 同步
+                            parent_window = self.window()
+                            if hasattr(parent_window, "update_signal"):
+                                parent_window.update_signal.emit(v_name, v_desc, v_url, v_force)
+                            elif hasattr(parent_window, "show_update_dialog"):
+                                # 直接调用主窗口的弹窗方法
+                                QTimer.singleShot(0, lambda: parent_window.show_update_dialog(v_name, v_desc, v_url, v_force))
                         else:
                             QTimer.singleShot(0, lambda: self.show_message("当前已是最新版本"))
+                            QTimer.singleShot(0, lambda: self.update_panel.setVisible(False))
+                            # 隐藏远程控制页面的横幅
+                            parent_window = self.window()
+                            if hasattr(parent_window, "page_remote"):
+                                QTimer.singleShot(0, lambda: parent_window.page_remote.update_banner.hide())
                     else:
                         QTimer.singleShot(0, lambda: self.show_message(f"检查更新失败: {res.get('error', '未知错误')}"))
                 else:
@@ -2132,14 +2352,20 @@ class AboutWidget(QWidget):
         threading.Thread(target=thread_worker, daemon=True).start()
 
 class MainWindow(QMainWindow):
+    update_signal = pyqtSignal(str, str, str, bool)
+    download_signal = pyqtSignal(int, str) # progress, status_text
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
+        self.initUI()
+        
         self.setWindowTitle("RootDesk")
         self.setWindowIcon(qta.icon('fa5s.desktop', color=PRIMARY_COLOR))
         self.resize(1100, 780)
         
         # 启动后立即检查更新
+        self.update_signal.connect(self.handle_update_signal)
+        self.download_signal.connect(self.handle_download_signal)
         QTimer.singleShot(2000, self.check_update_auto)
         self.setStyleSheet(GLOBAL_STYLE)
         
@@ -2148,7 +2374,66 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.poll_data)
         self.timer.start(1000)
         
-        self.initUI()
+    def handle_download_signal(self, progress, status):
+        if not hasattr(self, "download_dialog"):
+            self.download_dialog = DownloadProgressDialog(self)
+            self.download_dialog.show()
+            
+        if progress >= 100:
+            self.download_dialog.set_progress(100, "下载完成！")
+            QTimer.singleShot(1000, self.download_dialog.accept)
+            if hasattr(self, "download_dialog"):
+                delattr(self, "download_dialog")
+        elif progress < 0:
+            self.download_dialog.set_progress(0, f"下载失败: {status}")
+            QTimer.singleShot(3000, self.download_dialog.reject)
+            if hasattr(self, "download_dialog"):
+                delattr(self, "download_dialog")
+        else:
+            self.download_dialog.set_progress(progress, status)
+
+    def start_download_update(self, url):
+        """开始下载更新"""
+        if not hasattr(self, "download_dialog"):
+            self.download_dialog = DownloadProgressDialog(self)
+            self.download_dialog.show()
+            
+        def download_thread():
+            try:
+                import requests
+                import tempfile
+                import subprocess
+                
+                print(f"[*] Starting download from {url}")
+                response = requests.get(url, stream=True, timeout=60)
+                total_size = int(response.headers.get('content-length', 0))
+                
+                auth_dir = os.path.join(os.environ.get('APPDATA', os.getcwd()), "RootDesk")
+                if not os.path.exists(auth_dir):
+                    os.makedirs(auth_dir, exist_ok=True)
+                
+                temp_exe = os.path.join(auth_dir, "RootDesk_Setup.exe")
+                
+                downloaded_size = 0
+                with open(temp_exe, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            if total_size > 0:
+                                progress = int(downloaded_size * 100 / total_size)
+                                self.download_signal.emit(progress, f"正在下载... {progress}%")
+                
+                self.download_signal.emit(100, "下载完成，正在启动安装程序...")
+                
+                # 自动打开下载的安装包
+                os.startfile(temp_exe)
+                
+            except Exception as e:
+                print(f"[*] Download error: {e}")
+                self.download_signal.emit(-1, str(e))
+                
+        threading.Thread(target=download_thread, daemon=True).start()
         
     def initUI(self):
         central_widget = QWidget()
@@ -2240,7 +2525,19 @@ class MainWindow(QMainWindow):
         btn_contact.setIcon(qta.icon('fa5s.comments', color=MUTED_COLOR))
         btn_contact.setObjectName("iconBtn")
         btn_contact.setStyleSheet("text-align: left; padding: 10px; margin: 0 12px;")
-        btn_contact.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://contact.rootdesk.cn")))
+        
+        def open_contact():
+            base_domain = "rootdesk.cn"
+            if hasattr(self.bridge, "get_app_url"):
+                res = self.bridge.get_app_url()
+                if res and res.get("url"):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(res.get("url"))
+                    if parsed.netloc and "rootdesk.cn" not in parsed.netloc:
+                        base_domain = parsed.netloc
+            QDesktopServices.openUrl(QUrl(f"https://contact.{base_domain}"))
+            
+        btn_contact.clicked.connect(open_contact)
         
         btn_gitee = QPushButton(" 开源地址")
         btn_gitee.setIcon(qta.icon('fa5s.globe', color=MUTED_COLOR))
@@ -2325,28 +2622,61 @@ class MainWindow(QMainWindow):
         event.ignore()
         self.hide()
         
+    def handle_update_signal(self, name, desc, url, force):
+        print(f"[*] handle_update_signal triggered: {name}")
+        # 同步更新关于页面的面板
+        if hasattr(self, "page_about"):
+            self.page_about.show_update_info(name, desc, url)
+        
+        # 同步更新远程页面的横幅
+        if hasattr(self, "page_remote"):
+            self.page_remote.show_update_info(name, desc, url)
+        
+        # 弹窗
+        self.show_update_dialog(name, desc, url, force)
+
     def check_update_auto(self):
         """自动检查更新"""
+        print("[*] Starting auto update check...")
+        
+        # 尝试获取 APP_URL 作为默认 URL
+        base_url = "https://rootdesk.cn"
+        if hasattr(self.bridge, "get_app_url"):
+            res_url = self.bridge.get_app_url()
+            if res_url and res_url.get("url"):
+                base_url = res_url.get("url")
+
         def thread_worker():
             try:
                 if hasattr(self.bridge, "check_for_updates"):
+                    print("[*] Calling bridge.check_for_updates()...")
                     res = self.bridge.check_for_updates()
+                    print(f"[*] Update check result: {res}")
                     if res and res.get("success") and res.get("hasUpdate"):
                         v_name = res.get("versionName", "未知")
                         v_desc = res.get("versionDesc", "暂无说明")
-                        v_url = res.get("versionUrl", "https://rootdesk.cn")
+                        v_url = res.get("versionUrl", base_url)
                         v_force = res.get("isForce", False)
                         
-                        # 回到主线程弹窗
-                        QTimer.singleShot(0, lambda: self.show_update_dialog(v_name, v_desc, v_url, v_force))
+                        print(f"[*] New version found: {v_name}, emitting update_signal...")
+                        self.update_signal.emit(v_name, v_desc, v_url, v_force)
+                    else:
+                        print("[*] No update needed or check failed.")
+                else:
+                    print("[!] Bridge does not have check_for_updates method.")
             except Exception as e:
                 print(f"[*] Auto check update error: {e}")
+                import traceback
+                traceback.print_exc()
                 
         threading.Thread(target=thread_worker, daemon=True).start()
         
     def show_update_dialog(self, name, desc, url, force):
+        print(f"[*] Opening UpdateDialog: {name}")
         dialog = UpdateDialog(name, desc, url, force, self)
-        dialog.exec_()
+        print("[*] Dialog created, calling exec_()...")
+        res = dialog.exec_()
+        print(f"[*] Dialog closed with result: {res}")
 
     @pyqtSlot()
     def show_window(self):

@@ -24,6 +24,8 @@ import string
 import ssl
 import asyncio
 import queue
+import ctypes
+from ctypes import wintypes
 
 
 
@@ -36,14 +38,27 @@ RECONNECT_INTERVAL = 5
 AUTO_START = "none"
 ENABLED_MODULES = ['screen', 'terminal', 'files', 'windows', 'monitor', 'audio']
 PLATFORM_MODE = "pc"
-APP_URL = "https://rootdesk.cn"
+
+# 初始化 APP_URL (将在读取配置后更新)
+APP_URL = ""
+
+def update_app_url():
+    """根据当前配置更新 APP_URL"""
+    global APP_URL, PROTOCOL, HOST, PORT
+    _http_protocol = "https" if PROTOCOL == "wss" else "http"
+    if PORT in [80, 443]:
+        APP_URL = f"{_http_protocol}://{HOST}"
+    else:
+        APP_URL = f"{_http_protocol}://{HOST}:{PORT}"
+    print(f"[*] APP_URL updated: {APP_URL}")
+
 ENCRYPTION_KEY = "dGVzdF9rZXlfMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
 SINGLE_INSTANCE = "True"
 INSTALL_AS_SERVICE = False
 
 # --- 当前版本 ---
-CLIENT_VERSION = 6
-CLIENT_VERSION_NAME = "1.0.6"
+CLIENT_VERSION = 7
+CLIENT_VERSION_NAME = "1.0.7"
 
 
 # --- 屏幕传输性能与阈值配置 ---
@@ -447,6 +462,7 @@ def manage_server_config():
                 if "protocol" in config:
                     PROTOCOL = config["protocol"]
                 print(f"[*] Loaded server config from {config_file}: {PROTOCOL}://{HOST}:{PORT}")
+                update_app_url()
                 return
     except Exception as e:
         print(f"[*] Could not read server config: {e}")
@@ -458,6 +474,7 @@ def manage_server_config():
         with open(config_file, "w") as f:
             import json
             json.dump({"host": HOST, "port": PORT, "protocol": PROTOCOL}, f)
+        update_app_url()
     except Exception as e:
         print(f"[*] Could not save default server config: {e}")
 
@@ -478,9 +495,10 @@ def update_ip_info_worker():
         
         # Source 1: Custom API (Prioritized)
         try:
-            print("[*] Trying Source 1: rootdesk.cn...")
+            api_url = f"{APP_URL}/api/ip"
+            print(f"[*] Trying Source 1: {api_url}...")
             import requests
-            response = requests.get("https://rootdesk.cn/api/ip", timeout=5)
+            response = requests.get(api_url, timeout=5)
             data = response.json()
             if "ip" in data:
                 ip_val = data["ip"]
@@ -718,12 +736,12 @@ def create_tray_icon():
 RTC_PCS = {} # clientId -> RTCPeerConnection
 RTC_DCS = {} # clientId -> RTCDataChannel
 RTC_LOOP = None
-RTC_CONFIG_FUTURE = None
+RTC_CONFIG_FUTURES = {} # clientId -> Future
 RTC_CANDIDATE_QUEUES = {} # clientId -> [candidates]
 RTC_LOOP_LAST_ALIVE = time.time()
 
-async def get_turn_config():
-    global RTC_CONFIG_FUTURE
+async def get_turn_config(client_id):
+    global RTC_CONFIG_FUTURES
     # 确保使用正确的 loop
     try:
         loop = asyncio.get_event_loop()
@@ -731,21 +749,23 @@ async def get_turn_config():
         if RTC_LOOP: loop = RTC_LOOP
         else: return None
         
-    RTC_CONFIG_FUTURE = loop.create_future()
-    # ... (rest of get_turn_config)
-    print("[*] 正在从服务器请求 TURN 配置...")
+    future = loop.create_future()
+    RTC_CONFIG_FUTURES[client_id] = future
+    
+    print(f"[*] 正在为客户端 {client_id} 从服务器请求 TURN 配置...")
     safe_send(WS_CLIENT, json.dumps({
         "type": "get_turn_config",
         "deviceId": DEVICE_ID.replace(" ", ""),
-        "password": DEVICE_PASSWORD
+        "password": DEVICE_PASSWORD,
+        "clientId": client_id
     }))
     try:
-        encrypted_data = await asyncio.wait_for(RTC_CONFIG_FUTURE, timeout=5.0)
+        encrypted_data = await asyncio.wait_for(future, timeout=5.0)
         if not encrypted_data:
-            print("[*] 服务器返回的 TURN 配置为空")
+            print(f"[*] 服务器返回的客户端 {client_id} TURN 配置为空")
             return None
         
-        print("[*] 正在解密 TURN 配置...")
+        print(f"[*] 正在解密客户端 {client_id} 的 TURN 配置...")
         # Decrypt using device password
         encrypted_bytes = base64.b64decode(encrypted_data)
         key = hashlib.sha256(DEVICE_PASSWORD.encode()).digest()
@@ -756,13 +776,14 @@ async def get_turn_config():
             
         return json.loads(decrypted_bytes.decode('utf-8'))
     except asyncio.TimeoutError:
-        print("[-] 获取 TURN 配置超时")
+        print(f"[-] 获取客户端 {client_id} TURN 配置超时")
         return None
     except Exception as e:
-        print(f"[-] 获取/解密 TURN 配置出错: {e}")
+        print(f"[-] 获取/解密客户端 {client_id} TURN 配置出错: {e}")
         return None
     finally:
-        RTC_CONFIG_FUTURE = None
+        if client_id in RTC_CONFIG_FUTURES:
+            del RTC_CONFIG_FUTURES[client_id]
 
 def start_rtc_loop():
     global RTC_LOOP, RTC_LOOP_LAST_ALIVE
@@ -913,33 +934,41 @@ async def add_ice_candidate(candidate_dict, client_id=None):
         try:
             from aiortc.sdp import candidate_from_sdp
             candidate_str = candidate_dict.get("candidate")
-            if candidate_str:
-                print(f"[*] 正在为客户端 {client_id} 添加 ICE Candidate: {candidate_str[:30]}...")
-                if candidate_str.startswith("candidate:"):
-                    candidate_str = candidate_str[10:]
+            if not candidate_str:
+                return
+
+            print(f"[*] 正在为客户端 {client_id} 处理 ICE Candidate: {candidate_str[:50]}...")
+            
+            # 更健壮的解析逻辑
+            if "candidate:" in candidate_str:
+                # 提取 candidate: 之后的内容
+                parts = candidate_str.split("candidate:", 1)
+                candidate_body = parts[1]
+            else:
+                candidate_body = candidate_str
+            
+            print(f"[*] 收到远程 Candidate ({client_id}): {candidate_body}")
+            
+            try:
+                # 使用 aiortc 的 sdp 解析工具
+                c = candidate_from_sdp(candidate_body)
+                if c:
+                    print(f"[*] 解析成功: 类型={c.type}, 协议={c.protocol}, 地址={c.ip}:{c.port}")
+                    c.sdpMid = candidate_dict.get("sdpMid")
+                    c.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
+                    
+                    if pc.remoteDescription:
+                        await pc.addIceCandidate(c)
+                        print(f"[+] 客户端 {client_id} 的 ICE Candidate 添加成功")
+                    else:
+                        # Queue candidates if remote description is not yet set
+                        if client_id not in RTC_CANDIDATE_QUEUES:
+                            RTC_CANDIDATE_QUEUES[client_id] = []
+                        RTC_CANDIDATE_QUEUES[client_id].append(candidate_dict)
+                        print(f"[*] 客户端 {client_id} 的 RemoteDescription 尚未就绪，ICE Candidate 已加入队列")
+            except Exception as inner_e:
+                print(f"[-] 客户端 {client_id} 的 ICE Candidate 解析失败: {inner_e}")
                 
-                c = candidate_from_sdp(candidate_str)
-                
-                candidate = RTCIceCandidate(
-                    component=c.component,
-                    foundation=c.foundation,
-                    ip=c.ip,
-                    port=c.port,
-                    priority=c.priority,
-                    protocol=c.protocol,
-                    type=c.type,
-                    sdpMid=candidate_dict.get("sdpMid"),
-                    sdpMLineIndex=candidate_dict.get("sdpMLineIndex")
-                )
-                
-                if pc.remoteDescription:
-                    await pc.addIceCandidate(candidate)
-                    print(f"[+] 客户端 {client_id} 的 ICE Candidate 添加成功")
-                else:
-                    # Queue candidates if remote description is not yet set
-                    if client_id not in RTC_CANDIDATE_QUEUES:
-                        RTC_CANDIDATE_QUEUES[client_id] = []
-                    RTC_CANDIDATE_QUEUES[client_id].append(candidate_dict)
         except Exception as e:
             print(f"[-] 添加 ICE Candidate 出错 ({client_id}): {e}")
     else:
@@ -947,6 +976,7 @@ async def add_ice_candidate(candidate_dict, client_id=None):
         if client_id not in RTC_CANDIDATE_QUEUES:
             RTC_CANDIDATE_QUEUES[client_id] = []
         RTC_CANDIDATE_QUEUES[client_id].append(candidate_dict)
+        print(f"[*] 客户端 {client_id} 尚未初始化，ICE Candidate 已加入队列")
 
 async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
     global RTC_PCS, RTC_DCS, RTC_CANDIDATE_QUEUES, FORCE_FULL_FRAME, FORCE_FULL_FRAME_UNTIL, ACTIVE_CONTROLLERS
@@ -972,7 +1002,7 @@ async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
     
     # Fetch dynamic TURN config
     print(f"[*] 正在为客户端 {client_id} 获取动态 TURN 配置...")
-    dynamic_ice_servers = await get_turn_config()
+    dynamic_ice_servers = await get_turn_config(client_id)
     
     # Create ICE servers
     ice_servers = []
@@ -981,48 +1011,38 @@ async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
         print(f"[*] 客户端 {client_id} 使用动态 TURN 服务器配置")
         for server in dynamic_ice_servers:
             try:
-                s = RTCIceServer(
-                    urls=server.get("urls"),
+                # 确保 urls 是数组格式
+                urls = server.get("urls")
+                if not isinstance(urls, list):
+                    urls = [urls]
+                # 构建 aiortc 期望的格式
+                from aiortc import RTCIceServer
+                ice_server = RTCIceServer(
+                    urls=urls,
                     username=server.get("username"),
                     credential=server.get("credential")
                 )
-                if isinstance(s, dict):
-                    class ServerWrapper:
-                        def __init__(self, d):
-                            self.urls = d.get('urls')
-                            self.username = d.get('username')
-                            self.credential = d.get('credential')
-                    ice_servers.append(ServerWrapper(s))
-                else:
-                    ice_servers.append(s)
+                ice_servers.append(ice_server)
+                print(f"[*] 添加 ICE 服务器: {urls}")
             except Exception as e:
-                print(f"[*] 从动态配置创建 RTCIceServer 失败: {e}")
+                print(f"[*] 从动态配置创建 ICE 服务器失败: {e}")
     
-    # Add default STUN as fallback
-    ice_servers.append(RTCIceServer(urls=["stun:stun.l.google.com:19302"]))
+    # STUN 配置完全从服务器动态获取，不写死在客户端
     
-    # Create the configuration object
+    # Create configuration
     try:
+        from aiortc import RTCConfiguration
         rtc_config = RTCConfiguration(iceServers=ice_servers)
     except Exception as e:
-        print(f"[*] RTCConfiguration 实例化失败: {e}. 切换到手动包装。")
-        class ManualConfig:
-            def __init__(self, iceServers):
-                self.iceServers = iceServers
-        rtc_config = ManualConfig(iceServers=ice_servers)
-
-    if isinstance(rtc_config, dict):
-        class ConfigWrapper:
-            def __init__(self, d):
-                for k, v in d.items():
-                    setattr(self, k, v)
-                if not hasattr(self, 'iceServers'):
-                    self.iceServers = d.get('iceServers', [])
-        rtc_config = ConfigWrapper(rtc_config)
+        print(f"[*] RTCConfiguration 创建失败: {e}，使用默认配置")
+        rtc_config = None
     
     print(f"[*] 正在初始化 RTCPeerConnection (Client: {client_id})")
     try:
-        pc = RTCPeerConnection(rtc_config)
+        if rtc_config:
+            pc = RTCPeerConnection(rtc_config)
+        else:
+            pc = RTCPeerConnection()
         RTC_PCS[client_id] = pc
     except Exception as e:
         print(f"[-] RTCPeerConnection 初始化失败: {e}")
@@ -1072,7 +1092,7 @@ async def setup_webrtc(offer_sdp, client_id="default", client_ip="未知"):
     @pc.on("icecandidate")
     def on_icecandidate(candidate):
         if candidate:
-            print(f"[*] 客户端生成了 ICE Candidate ({client_id}): {candidate.candidate[:30]}...")
+            print(f"[*] 受控端生成了 ICE Candidate ({client_id}): 类型={candidate.type}, 协议={candidate.protocol}, 地址={candidate.ip}:{candidate.port}")
             safe_send(WS_CLIENT, json.dumps({
                 "type": "webrtc_ice_candidate",
                 "deviceId": DEVICE_ID.replace(" ", ""),
@@ -1130,8 +1150,6 @@ ACTIVE_TRANSFERS = {} # transferId -> {file, total_size, current_size, window, p
 
 # Windows Input Structures
 if platform.system() == "Windows":
-    import ctypes
-    from ctypes import wintypes
     
     # Enable High DPI awareness to prevent UI squeezing/blurring on scaled displays
     try:
@@ -1170,6 +1188,26 @@ if platform.system() == "Windows":
     class INPUT(ctypes.Structure):
         _fields_ = [("type", wintypes.DWORD),
                     ("u", INPUT_UNION)]
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG)]
+
+    def get_dwm_dirty_region(hwnd):
+        """尝试获取 DWM 脏区 (变化的区域)"""
+        try:
+            rect = RECT()
+            # DwmGetDirtyRegion 期望一个 HWND，返回 S_OK (0) 表示成功
+            hr = ctypes.windll.dwmapi.DwmGetDirtyRegion(hwnd, ctypes.byref(rect))
+            if hr == 0:
+                # 检查是否是空矩形
+                if rect.left < rect.right and rect.top < rect.bottom:
+                    return (rect.left, rect.top, rect.right, rect.bottom)
+            return None
+        except:
+            return None
 
     INPUT_MOUSE = 0
     INPUT_KEYBOARD = 1
@@ -2705,22 +2743,64 @@ def stream_worker():
                 # 即使在强制全屏期间，我们也进行差异检测以判断是否需要延长全屏时长
                 if last_frame and last_frame.size == img.size:
                     w, h = img.size
-                    diff = ImageChops.difference(img, last_frame)
-                    thresh = diff.convert('L').point(lambda p: 255 if p > STREAM_DIFF_THRESHOLD else 0)
-                    bbox = thresh.getbbox()
+                    bbox = None
+                    diff = None
+
+                    # --- 优先使用 DWM 脏区读取 ---
+                    if platform.system() == "Windows":
+                        try:
+                            # 确定要检测的 HWND
+                            target_hwnd = 0 # 默认桌面
+                            if mode == "window" and target_id:
+                                target_hwnd = int(target_id)
+                            else:
+                                target_hwnd = ctypes.windll.user32.GetDesktopWindow()
+                            
+                            dwm_bbox = get_dwm_dirty_region(target_hwnd)
+                            if dwm_bbox:
+                                # 缩放 DWM 脏区到当前图像大小
+                                dx1, dy1, dx2, dy2 = dwm_bbox
+                                # 考虑到 scale
+                                x1 = int(dx1 * scale)
+                                y1 = int(dy1 * scale)
+                                x2 = int(dx2 * scale)
+                                y2 = int(dy2 * scale)
+                                # 限制在图像范围内
+                                x1 = max(0, min(w, x1))
+                                y1 = max(0, min(h, y1))
+                                x2 = max(0, min(w, x2))
+                                y2 = max(0, min(h, y2))
+                                if x1 < x2 and y1 < y2:
+                                    bbox = (x1, y1, x2, y2)
+                        except:
+                            pass
                     
-                    small_thresh = thresh.resize((16, 16), Image.Resampling.NEAREST)
-                    changed_blocks = 0
-                    for pixel in small_thresh.getdata():
-                        if pixel > 0:
-                            changed_blocks += 1
-                    
-                    # 如果活跃度高，延长全屏刷新时间（累加机制）
-                    # 在本地连接下，我们稍微放宽这个阈值
-                    multi_block_limit = STREAM_MULTI_BLOCK_THRESHOLD * 2 if check_is_local() else STREAM_MULTI_BLOCK_THRESHOLD
-                    if changed_blocks >= multi_block_limit:
-                        FORCE_FULL_FRAME_UNTIL = time.time() + STREAM_FORCE_FULL_DURATION
-                        is_forcing = True
+                    # --- 如果 DWM 读取失败或为空，使用现在的逻辑 (ImageChops) ---
+                    if bbox is None:
+                        diff = ImageChops.difference(img, last_frame)
+                        thresh = diff.convert('L').point(lambda p: 255 if p > STREAM_DIFF_THRESHOLD else 0)
+                        bbox = thresh.getbbox()
+
+                    if bbox:
+                        # 活跃度判定 (用于延长全屏刷新时间)
+                        if diff is None:
+                            # 如果是从 DWM 拿到的 bbox，且没有计算 diff，则简单根据面积比例判断
+                            area_ratio = ((bbox[2]-bbox[0]) * (bbox[3]-bbox[1])) / (w * h)
+                            if area_ratio > 0.5:
+                                FORCE_FULL_FRAME_UNTIL = time.time() + STREAM_FORCE_FULL_DURATION
+                                is_forcing = True
+                        else:
+                            # 使用原有的 ImageChops 差异块统计逻辑
+                            small_thresh = thresh.resize((16, 16), Image.Resampling.NEAREST)
+                            changed_blocks = 0
+                            for pixel in small_thresh.getdata():
+                                if pixel > 0:
+                                    changed_blocks += 1
+                            
+                            multi_block_limit = STREAM_MULTI_BLOCK_THRESHOLD * 2 if check_is_local() else STREAM_MULTI_BLOCK_THRESHOLD
+                            if changed_blocks >= multi_block_limit:
+                                FORCE_FULL_FRAME_UNTIL = time.time() + STREAM_FORCE_FULL_DURATION
+                                is_forcing = True
 
                     if is_forcing:
                         is_full_frame = True
@@ -4848,10 +4928,13 @@ def on_message(ws, message):
                     show_notification("协助请求", f"请求失败: {message}", msg_type="error")
                 
             elif cmd == "turn_config":
-                global RTC_CONFIG_FUTURE
-                if RTC_LOOP and RTC_CONFIG_FUTURE and not RTC_CONFIG_FUTURE.done():
-                    enc_data = data.get("encryptedData")
-                    RTC_LOOP.call_soon_threadsafe(lambda: RTC_CONFIG_FUTURE.set_result(enc_data) if not RTC_CONFIG_FUTURE.done() else None)
+                global RTC_CONFIG_FUTURES
+                cid = data.get("clientId")
+                if RTC_LOOP and cid in RTC_CONFIG_FUTURES:
+                    future = RTC_CONFIG_FUTURES[cid]
+                    if not future.done():
+                        enc_data = data.get("encryptedData")
+                        RTC_LOOP.call_soon_threadsafe(lambda: future.set_result(enc_data) if not future.done() else None)
 
             elif cmd == "webrtc_offer":
                 client_id = data.get("clientId", "default")
@@ -5428,71 +5511,6 @@ def check_local_commands_loop():
             except: pass
         time.sleep(2)
 
-def show_update_dialog(name, desc, url, force):
-    """显示更新提示"""
-    print(f"[*] New version available: {name} - {url}")
-    show_notification("新版本可用", f"发现新版本 {name}，请前往官网下载。")
-
-def perform_update(url):
-    """执行更新过程"""
-    print(f"[*] Starting update download from {url}")
-    try:
-        import requests
-        import tempfile
-        import subprocess
-        
-        auth_dir = SYSTEM_AUTH_DIR
-        if not os.path.exists(auth_dir):
-            os.makedirs(auth_dir, exist_ok=True)
-        temp_exe = os.path.join(auth_dir, "RootDesk_update.exe")
-        
-        response = requests.get(url, stream=True, timeout=60)
-        if response.status_code == 200:
-            with open(temp_exe, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-            
-            def get_long_path(p):
-                try:
-                    import ctypes
-                    buf = ctypes.create_unicode_buffer(1024)
-                    if ctypes.windll.kernel32.GetLongPathNameW(str(p), buf, 1024):
-                        return buf.value
-                except: pass
-                return str(p)
-                
-            vbs_current_exe = get_long_path(sys.executable).replace('"', '""')
-            vbs_temp_exe = get_long_path(temp_exe).replace('"', '""')
-            vbs_script = get_long_path(os.path.join(tempfile.gettempdir(), "rd_update.vbs"))
-            exe_name = os.path.basename(vbs_current_exe)
-            
-            vbs_content = f'''Set fso = CreateObject("Scripting.FileSystemObject")
-Set shell = CreateObject("WScript.Shell")
-WScript.Sleep 2000
-On Error Resume Next
-shell.Run "taskkill /f /im ""{exe_name}""", 0, True
-On Error GoTo 0
-WScript.Sleep 1000
-Do While fso.FileExists("{vbs_current_exe}")
-    On Error Resume Next
-    fso.DeleteFile "{vbs_current_exe}", True
-    If Err.Number = 0 Then Exit Do
-    On Error GoTo 0
-    WScript.Sleep 1000
-Loop
-fso.MoveFile "{vbs_temp_exe}", "{vbs_current_exe}"
-shell.Run chr(34) & "{vbs_current_exe}" & chr(34), 1, False
-fso.DeleteFile WScript.ScriptFullName, True
-'''
-            with open(vbs_script, "w", encoding="gbk") as f:
-                f.write(vbs_content)
-            
-            subprocess.Popen(["wscript.exe", vbs_script], shell=True)
-            os._exit(0)
-    except Exception as e:
-        print(f"Perform update failed: {e}")
-
 def connect(role="service"):
     global WS_CLIENT, CLIENT_ROLE
     CLIENT_ROLE = role
@@ -5818,6 +5836,16 @@ class RootDeskBridge:
 
     def check_for_updates(self):
         """手动检查更新"""
+        def clean_str(s):
+            if not s: return ""
+            # 移除前后的空白字符、反引号、单引号、双引号
+            import re
+            s = str(s).strip()
+            # 递归移除首尾的干扰符号
+            while s and (s[0] in " `\"'" or s[-1] in " `\"'"):
+                s = s.strip(" `\"'")
+            return s
+
         try:
             import requests
             base_url = APP_URL if APP_URL else f"http://{HOST}:{PORT}"
@@ -5842,29 +5870,23 @@ class RootDeskBridge:
                     server_version = 0
                     
                 if server_version > CLIENT_VERSION:
-                    return {
+                    res = {
                         "success": True, 
                         "hasUpdate": True,
-                        "versionName": data.get("version_name", "Unknown"),
-                        "versionDesc": data.get("version_desc", ""),
-                        "versionUrl": data.get("version_url", ""),
+                        "versionName": clean_str(data.get("version_name", "Unknown")),
+                        "versionDesc": clean_str(data.get("version_desc", "")),
+                        "versionUrl": clean_str(data.get("version_url", "")),
                         "isForce": data.get("version_q", 0) == 1
                     }
+                    print(f"[Bridge] 发现新版本: {res}")
+                    return res
                 else:
+                    print("[Bridge] 当前已是最新版本")
                     return {"success": True, "hasUpdate": False}
             else:
                 return {"success": False, "error": f"服务器返回错误: {response.status_code}"}
         except Exception as e:
             print(f"[Bridge] 检查更新失败: {e}")
-            return {"success": False, "error": str(e)}
-
-    def start_update_process(self, url):
-        """启动更新下载和执行过程"""
-        try:
-            import threading
-            threading.Thread(target=lambda: perform_update(url), daemon=True).start()
-            return {"success": True}
-        except Exception as e:
             return {"success": False, "error": str(e)}
 
     def refresh_password(self):
@@ -5920,6 +5942,9 @@ class RootDeskBridge:
             REMARK = str(remark)
             RECONNECT_INTERVAL = int(reconnectInterval)
             
+            # 同步更新 APP_URL
+            update_app_url()
+            
             # 通过 hook os.path.exists 强制保存新配置
             orig_exists = os.path.exists
             def hooked_exists(path):
@@ -5930,6 +5955,15 @@ class RootDeskBridge:
             try:
                 manage_server_config()
                 print("[Bridge] 网络配置已保存")
+                
+                # 立即断开当前连接以触发重新连接
+                global WS_CLIENT
+                if WS_CLIENT:
+                    print("[Bridge] 正在断开当前连接以应用新配置...")
+                    try:
+                        WS_CLIENT.close()
+                    except:
+                        pass
             finally:
                 os.path.exists = orig_exists
             
